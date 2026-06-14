@@ -182,6 +182,7 @@ tbody tr:last-child td { border-bottom: none; }
   <div class="nav-item" onclick="showSection('analytics', this)"><span class="icon">📈</span> 데이터 분석</div>
   <div class="nav-section">설정</div>
   <div class="nav-item" onclick="showSection('config', this)"><span class="icon">⚙️</span> 앱 설정</div>
+  <div class="nav-item" onclick="showSection('service_area', this)"><span class="icon">🗺️</span> 서비스 지역 관리</div>
   <div class="nav-item" id="nav-master" style="display:none;" onclick="showSection('master', this)"><span class="icon">🔐</span> 마스터 관리 <span class="nav-badge" id="master-pending-badge" style="display:none;">0</span></div>
   <div class="sidebar-footer">
     <div class="admin-avatar">👑</div>
@@ -813,6 +814,25 @@ tbody tr:last-child td { border-bottom: none; }
     </div>
   </div>
 
+  <!-- ===== 서비스 지역 관리 ===== -->
+  <div id="service_area" class="section">
+    <div class="section-header">
+      <div><div class="section-header-title">서비스 지역 관리</div><div class="section-header-sub">오픈 지역 설정 및 수요 조회</div></div>
+      <button class="btn btn-ghost" onclick="loadServiceAreas()">🔄 새로고침</button>
+    </div>
+
+    <div class="grid-2" style="margin-bottom:16px;">
+      <div class="card">
+        <div class="card-title">서울 지역 오픈 현황</div>
+        <div id="service-area-list">로딩 중...</div>
+      </div>
+      <div class="card">
+        <div class="card-title">미오픈 지역 수요 현황 <span>확장 우선순위 참고</span></div>
+        <div id="area-demand-list">로딩 중...</div>
+      </div>
+    </div>
+  </div>
+
   <!-- ===== 앱 설정 ===== -->
   <div id="config" class="section">
     <div class="section-header">
@@ -961,7 +981,7 @@ function showSection(id, el) {
   document.getElementById(id).classList.add('active');
   if (el) el.classList.add('active');
   currentSection = id;
-  const titles = { dashboard:'대시보드', orders:'주문 관리', pickup_fail:'픽업 불가 신고', users:'유저 관리', drivers:'기사 관리', settlement:'정산 관리', refund:'환불 관리', push:'푸시 알림', notice:'공지사항', coupon:'쿠폰 관리', analytics:'데이터 분석', config:'앱 설정', map:'기사 위치 추적', agents:'대리점 관리', master:'마스터 관리' };
+  const titles = { dashboard:'대시보드', orders:'주문 관리', pickup_fail:'픽업 불가 신고', users:'유저 관리', drivers:'기사 관리', settlement:'정산 관리', refund:'환불 관리', push:'푸시 알림', notice:'공지사항', coupon:'쿠폰 관리', analytics:'데이터 분석', config:'앱 설정', service_area:'서비스 지역 관리', map:'기사 위치 추적', agents:'대리점 관리', master:'마스터 관리' };
   document.getElementById('topbar-title').textContent = titles[id] || id;
   if (id === 'dashboard') loadDashboard();
   else if (id === 'orders') setOrderPeriod('today');
@@ -975,6 +995,7 @@ function showSection(id, el) {
   else if (id === 'analytics') loadAnalytics();
   else if (id === 'agents') loadAgents();
   else if (id === 'map') loadMap();
+  else if (id === 'service_area') loadServiceAreas();
   else if (id === 'master') loadMasterSection();
 }
 
@@ -992,6 +1013,136 @@ function refreshCurrentSection() {
   else if (currentSection === 'agents') loadAgents();
   else if (currentSection === 'map') loadMap();
   else if (currentSection === 'master') loadMasterSection();
+}
+
+async function loadServiceAreas() {
+  const { data: areas } = await db.from('service_areas').select('*').order('district');
+  const { data: demands } = await db.from('area_demand').select('district, type');
+
+  // 지역별 수요 집계
+  const demandMap = {};
+  (demands || []).forEach(d => {
+    if (!demandMap[d.district]) demandMap[d.district] = { user: 0, driver: 0 };
+    demandMap[d.district][d.type] = (demandMap[d.district][d.type] || 0) + 1;
+  });
+
+  // 서울 지역 목록
+  const seoul = (areas || []).filter(a => a.district.includes('구') && a.district !== '대구');
+  const others = (areas || []).filter(a => !a.district.includes('구') || a.district === '대구');
+
+  const seoulRows = seoul.map(a => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+      <span style="font-size:12px;font-weight:700;color:var(--text);">${a.district}</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:10px;color:var(--text3);">기사 ${demandMap[a.district]?.driver||0} / 유저 ${demandMap[a.district]?.user||0}</span>
+        <div class="toggle ${a.is_open ? 'on' : ''}" onclick="toggleServiceArea('${a.id}', ${a.is_open}, '${a.district}', this)"></div>
+        <span style="font-size:10px;color:${a.is_open ? 'var(--green)' : 'var(--text3)'};">${a.is_open ? '오픈' : '준비중'}</span>
+      </div>
+    </div>
+  `).join('');
+
+  const othersRows = others.map(a => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+      <span style="font-size:12px;font-weight:700;color:var(--text);">${a.district}</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:10px;color:var(--text3);">기사 ${demandMap[a.district]?.driver||0} / 유저 ${demandMap[a.district]?.user||0}</span>
+        <div class="toggle ${a.is_open ? 'on' : ''}" onclick="toggleServiceArea('${a.id}', ${a.is_open}, '${a.district}', this)"></div>
+        <span style="font-size:10px;color:${a.is_open ? 'var(--green)' : 'var(--text3)'};">${a.is_open ? '오픈' : '준비중'}</span>
+      </div>
+    </div>
+  `).join('');
+
+  document.getElementById('service-area-list').innerHTML =
+    '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:8px;">서울</div>' +
+    seoulRows +
+    '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-top:16px;margin-bottom:8px;">서울 외 지역</div>' +
+    othersRows;
+
+  // 수요 현황 (미오픈 지역만, 수요 많은 순)
+  const demandEntries = Object.entries(demandMap)
+    .filter(([district]) => {
+      const area = (areas || []).find(a => a.district === district);
+      return !area?.is_open;
+    })
+    .sort((a, b) => (b[1].user + b[1].driver) - (a[1].user + a[1].driver));
+
+  const demandRows = demandEntries.length > 0
+    ? demandEntries.map(([district, counts]) => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+        <span style="font-size:12px;font-weight:700;color:var(--text);">${district}</span>
+        <div style="display:flex;gap:12px;">
+          <span style="font-size:11px;color:var(--blue);">유저 ${counts.user}명</span>
+          <span style="font-size:11px;color:var(--green);">기사 ${counts.driver}명</span>
+          <button class="btn btn-primary" style="padding:3px 8px;font-size:9px;" onclick="openDistrictWithNotify('${district}')">오픈+알림</button>
+        </div>
+      </div>
+    `).join('')
+    : '<div style="color:var(--text3);font-size:11px;padding:12px 0;">수요 데이터 없음</div>';
+
+  document.getElementById('area-demand-list').innerHTML = demandRows;
+}
+
+async function toggleServiceArea(id, currentOpen, district, el) {
+  const newOpen = !currentOpen;
+  await db.from('service_areas').update({ is_open: newOpen, opened_at: newOpen ? new Date().toISOString() : null }).eq('id', id);
+  el.classList.toggle('on');
+  el.nextElementSibling.textContent = newOpen ? '오픈' : '준비중';
+  el.nextElementSibling.style.color = newOpen ? 'var(--green)' : 'var(--text3)';
+}
+
+async function openDistrictWithNotify(district) {
+  if (!confirm(`${district} 지역을 오픈하고 해당 지역 기사/유저에게 알림을 발송할까요?`)) return;
+
+  // 지역 오픈
+  await db.from('service_areas').update({ is_open: true, opened_at: new Date().toISOString() }).eq('district', district);
+
+  // 해당 지역 기사 푸시 토큰 조회
+  const { data: drivers } = await db.from('drivers').select('push_token').eq('service_area', district).not('push_token', 'is', null);
+  const tokens = (drivers || []).map(d => d.push_token).filter(Boolean);
+
+  if (tokens.length > 0) {
+    await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` },
+      body: JSON.stringify({
+        tokens,
+        title: `${district} 서비스 오픈! 🎉`,
+        body: `${district} 지역 서비스가 시작됐어요! 지금 바로 배달을 시작해보세요.`
+      })
+    });
+  }
+
+  // 해당 지역 주문 시도 유저 푸시 토큰 조회
+  const { data: demandUsers } = await db.from('area_demand')
+    .select('user_id')
+    .eq('district', district)
+    .eq('type', 'user')
+    .not('user_id', 'is', null);
+
+  const userIds = [...new Set((demandUsers || []).map(d => d.user_id))];
+  let userTokens = [];
+  if (userIds.length > 0) {
+    const { data: users } = await db.from('users')
+      .select('push_token')
+      .in('id', userIds)
+      .not('push_token', 'is', null);
+
+    userTokens = (users || []).map(u => u.push_token).filter(Boolean);
+    if (userTokens.length > 0) {
+      await fetch(`${SUPABASE_URL}/functions/v1/send-push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` },
+        body: JSON.stringify({
+          tokens: userTokens,
+          title: `${district} 서비스 오픈! 🎉`,
+          body: `${district} 지역에서 심부름 서비스를 이용하실 수 있어요!`
+        })
+      });
+    }
+  }
+
+  alert(`${district} 오픈 완료!\n기사 ${tokens.length}명 + 유저 ${userTokens.length}명에게 푸시 발송됨`);
+  loadServiceAreas();
 }
 
 function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
