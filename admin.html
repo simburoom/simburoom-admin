@@ -1290,6 +1290,13 @@ async function resolvePickupFail(orderId, action, btn) {
           today_earnings: (driver.today_earnings||0) + 1000,
           total_earnings: (driver.total_earnings||0) + 1000,
         }).eq('id', order.driver_id);
+        await db.from('driver_compensations').insert({
+          driver_id: order.driver_id,
+          amount: 1000,
+          type: 'pickup_fail_compensation',
+          description: '픽업 불가 보상',
+          order_id: orderId,
+        });
       }
     }
   }
