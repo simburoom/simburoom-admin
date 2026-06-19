@@ -184,6 +184,7 @@
       <div id="view-more" class="view">
         <div class="section-title">더보기</div>
         <div class="more-menu">
+          <div class="more-item" onclick="openSub('config')"><span class="ic">⚙️</span> 앱 설정 <span class="arrow">›</span></div>
           <div class="more-item" onclick="openSub('agents')"><span class="ic">🏢</span> 대리점 등록 <span class="arrow">›</span></div>
           <div class="more-item" id="more-master" style="display:none;" onclick="openSub('master')"><span class="ic">🔐</span> 마스터 관리 <span class="arrow">›</span></div>
           <div class="more-item" onclick="openSub('coupons')"><span class="ic">🎫</span> 쿠폰 관리 <span class="arrow">›</span></div>
@@ -270,6 +271,20 @@
         </div>
         <div class="section-title">공지 목록</div>
         <div id="notice-list"><div class="empty">로딩 중...</div></div>
+      </div>
+
+      <!-- SUB: config -->
+      <div id="view-config" class="view">
+        <div class="subhead"><button class="back-btn" onclick="backToMore()">←</button><h2>앱 설정</h2></div>
+        <div class="card">
+          <div class="section-title" style="margin-top:0;">피크타임 주문 차단 시간대</div>
+          <label class="fl">아래 시간대에는 매일 신규 주문이 자동 차단됩니다 (요일 구분 없음)</label>
+          <div id="m-peak-list" style="margin-bottom:12px;"></div>
+          <label class="fl">시작 시간</label><input type="time" id="m-peak-start">
+          <label class="fl">종료 시간</label><input type="time" id="m-peak-end">
+          <button class="btn btn-ghost btn-block" onclick="addPeakSlotM()">+ 추가</button>
+          <button class="btn btn-brand btn-block" style="margin-top:10px;" onclick="savePeakScheduleM()">💾 저장</button>
+        </div>
       </div>
     </div>
 
@@ -358,7 +373,7 @@ function logout() {
 
 /* ===== Navigation ===== */
 const TAB_TITLES = { home: '홈', drivers: '기사', orders: '주문', area: '지역', more: '더보기' };
-const SUB_TITLES = { agents: '대리점', master: '마스터', coupons: '쿠폰', push: '푸시 알림', notices: '공지사항' };
+const SUB_TITLES = { agents: '대리점', master: '마스터', coupons: '쿠폰', push: '푸시 알림', notices: '공지사항', config: '앱 설정' };
 function setView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + id).classList.add('active');
@@ -380,10 +395,54 @@ function openSub(id) {
   else if (id === 'master') loadMasterSection();
   else if (id === 'coupons') loadCoupons();
   else if (id === 'notices') loadNotices();
+  else if (id === 'config') loadPeakScheduleM();
 }
 function backToMore() {
   setView('more');
   document.getElementById('topbar-title').textContent = '더보기';
+}
+
+/* ===== 피크타임 차단 시간표 ===== */
+let peakSlotsM = [];
+
+async function loadPeakScheduleM() {
+  const { data } = await db.from('app_config').select('value').eq('key', 'peak_schedule').maybeSingle();
+  try { peakSlotsM = data?.value ? JSON.parse(data.value) : []; } catch(e) { peakSlotsM = []; }
+  renderPeakScheduleM();
+}
+
+function renderPeakScheduleM() {
+  const c = document.getElementById('m-peak-list');
+  if (!c) return;
+  if (peakSlotsM.length === 0) { c.innerHTML = '<div class="empty">설정된 차단 시간대 없음 (현재 24시간 주문 가능)</div>'; return; }
+  c.innerHTML = peakSlotsM.map((s, i) => `
+    <div class="list-item" style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:15px;font-weight:800;color:var(--red);">${s.start} ~ ${s.end}</span>
+      <button class="btn btn-red" style="margin-left:auto;padding:8px 14px;font-size:12px;" onclick="removePeakSlotM(${i})">삭제</button>
+    </div>`).join('');
+}
+
+function addPeakSlotM() {
+  const start = document.getElementById('m-peak-start').value;
+  const end = document.getElementById('m-peak-end').value;
+  if (!start || !end) { alert('시작·종료 시간을 모두 입력해주세요.'); return; }
+  if (start >= end) { alert('종료 시간이 시작 시간보다 늦어야 합니다.'); return; }
+  peakSlotsM.push({ start, end });
+  peakSlotsM.sort((a, b) => a.start.localeCompare(b.start));
+  document.getElementById('m-peak-start').value = '';
+  document.getElementById('m-peak-end').value = '';
+  renderPeakScheduleM();
+}
+
+function removePeakSlotM(i) {
+  peakSlotsM.splice(i, 1);
+  renderPeakScheduleM();
+}
+
+async function savePeakScheduleM() {
+  const { error } = await db.from('app_config').upsert({ key: 'peak_schedule', value: JSON.stringify(peakSlotsM), updated_at: new Date().toISOString() });
+  if (error) { alert('저장 실패: ' + error.message); return; }
+  alert('피크 차단 시간대가 저장됐어요!');
 }
 
 /* ===== Dashboard ===== */
@@ -495,7 +554,7 @@ async function loadServiceAreas() {
       <span class="area-name">${a.district}</span>
       <div style="display:flex;align-items:center;gap:10px;">
         <span class="area-state" style="color:${a.is_open ? 'var(--green)' : 'var(--text3)'};">${a.is_open ? '오픈' : '준비중'}</span>
-        <div class="toggle ${a.is_open ? 'on' : ''}" onclick="toggleArea('${a.id}', ${a.is_open}, this)"></div>
+        <div class="toggle ${a.is_open ? 'on' : ''}" data-id="${a.id}" data-open="${a.is_open}" onclick="toggleArea(this.dataset.id, this.dataset.open === 'true', this)"></div>
       </div>
     </div>`;
   c.innerHTML =
@@ -511,7 +570,7 @@ async function toggleArea(id, currentOpen, el) {
   const stateEl = el.previousElementSibling;
   stateEl.textContent = newOpen ? '오픈' : '준비중';
   stateEl.style.color = newOpen ? 'var(--green)' : 'var(--text3)';
-  el.setAttribute('onclick', `toggleArea('${id}', ${newOpen}, this)`);
+  el.dataset.open = String(newOpen);
 }
 
 /* ===== Agents ===== */
