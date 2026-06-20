@@ -852,53 +852,6 @@ tbody tr:last-child td { border-bottom: none; }
             <button class="btn btn-primary" onclick="savePeakSchedule()">💾 저장</button>
           </div>
         </div>
-        <div class="setting-row">
-          <div class="setting-info"><div class="s-title">신규 기사 가입</div><div class="s-desc">OFF 시 가입 신청 불가</div></div>
-          <div class="setting-control"><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
-        </div>
-        <div class="setting-row">
-          <div class="setting-info"><div class="s-title">자동 배송비 인상 기본값</div><div class="s-desc">신규 주문 시 자동인상 기본 ON</div></div>
-          <div class="setting-control"><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">기사 프로모션</div>
-        <div class="setting-row">
-          <div class="setting-info"><div class="s-title">신규 기사 첫 N건 수수료 0%</div><div class="s-desc">첫 10건 배송비 전액 지급</div></div>
-          <div class="setting-control">
-            <input class="form-input" value="10" style="width:60px;text-align:center;">건
-            <div class="toggle on" onclick="this.classList.toggle('on')"></div>
-          </div>
-        </div>
-        <div class="setting-row">
-          <div class="setting-info"><div class="s-title">플랫폼 수수료율</div><div class="s-desc">기사 수령액 = 배송비 × (1 - 수수료율)</div></div>
-          <div class="setting-control"><input class="form-input" value="20" style="width:60px;text-align:center;">%</div>
-        </div>
-        <div class="setting-row">
-          <div class="setting-info"><div class="s-title">최소 배송비</div><div class="s-desc">유저가 설정 가능한 최소 금액</div></div>
-          <div class="setting-control"><input class="form-input" value="3000" style="width:80px;text-align:center;">원</div>
-        </div>
-        <div style="margin-top:12px;"><button class="btn btn-primary">저장</button></div>
-      </div>
-      <div class="card">
-        <div class="card-title">취소 수수료 정책</div>
-        <div class="setting-row">
-          <div class="setting-info"><div class="s-title">배차 후 이동 중 취소 수수료</div></div>
-          <div class="setting-control"><input class="form-input" value="30" style="width:60px;text-align:center;">%</div>
-        </div>
-        <div class="setting-row">
-          <div class="setting-info"><div class="s-title">픽업지 도착 후 취소 수수료</div></div>
-          <div class="setting-control"><input class="form-input" value="50" style="width:60px;text-align:center;">%</div>
-        </div>
-        <div class="setting-row">
-          <div class="setting-info"><div class="s-title">기사 헛걸음 보상 비율</div></div>
-          <div class="setting-control"><input class="form-input" value="80" style="width:60px;text-align:center;">%</div>
-        </div>
-        <div class="setting-row">
-          <div class="setting-info"><div class="s-title">픽업 불가 고정 보상</div></div>
-          <div class="setting-control"><input class="form-input" value="1000" style="width:70px;text-align:center;">원</div>
-        </div>
-        <div style="margin-top:12px;"><button class="btn btn-primary">저장</button></div>
       </div>
       <div class="card">
         <div class="card-title">사업자 정보</div>
@@ -1434,21 +1387,22 @@ async function loadPickupFails() {
 }
 
 async function resolvePickupFail(orderId, action, btn) {
-  if (!confirm(action === 'compensate' ? '기사에게 1,000원 보상 후 처리할까요?' : '취소 처리할까요?')) return;
+  const { data: order } = await db.from('orders').select('driver_id, delivery_fee').eq('id', orderId).maybeSingle();
+  const comp = Math.min(2000, Math.max(500, Math.floor((order?.delivery_fee || 0) * 0.2)));
+  if (!confirm(action === 'compensate' ? `기사에게 ${comp.toLocaleString()}원 보상 후 처리할까요?` : '취소 처리할까요?')) return;
   btn.disabled = true;
   if (action === 'compensate') {
-    const { data: order } = await db.from('orders').select('driver_id').eq('id', orderId).maybeSingle();
     if (order?.driver_id) {
       const { data: driver } = await db.from('drivers').select('withdrawable_amount, today_earnings, total_earnings').eq('id', order.driver_id).maybeSingle();
       if (driver) {
         await db.from('drivers').update({
-          withdrawable_amount: (driver.withdrawable_amount||0) + 1000,
-          today_earnings: (driver.today_earnings||0) + 1000,
-          total_earnings: (driver.total_earnings||0) + 1000,
+          withdrawable_amount: (driver.withdrawable_amount||0) + comp,
+          today_earnings: (driver.today_earnings||0) + comp,
+          total_earnings: (driver.total_earnings||0) + comp,
         }).eq('id', order.driver_id);
         await db.from('driver_compensations').insert({
           driver_id: order.driver_id,
-          amount: 1000,
+          amount: comp,
           type: 'pickup_fail_compensation',
           description: '픽업 불가 보상',
           order_id: orderId,
