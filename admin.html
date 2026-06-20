@@ -1387,48 +1387,88 @@ async function loadPickupFails() {
 }
 
 async function resolvePickupFail(orderId, action, btn) {
-  const { data: order } = await db.from('orders').select('driver_id, delivery_fee, buyer_id').eq('id', orderId).maybeSingle();
-  const comp = Math.floor((order?.delivery_fee || 0) * 0.2);
+  const { data: order } = await db.from('orders').select('driver_id, buyer_id, cancel_fee, cancel_fee_charge, cancel_fee_point, delivery_fee, order_type').eq('id', orderId).maybeSingle();
+  const comp = order?.cancel_fee || 0;
   if (action === 'compensate') {
-    if (!confirm(`유저에게 ${comp.toLocaleString()}원 차감하고, 기사에게 ${comp.toLocaleString()}원 보상 후 처리할까요?`)) return;
+    // 기사 지급액: buy는 회사 부담(배송비 20%), sell은 유저 선차감액(comp)
+    const driverPay = order?.order_type === 'buy' ? Math.floor((order?.delivery_fee || 0) * 0.2) : comp;
+    const msg = order?.order_type === 'buy'
+      ? `기사에게 ${driverPay.toLocaleString()}원을 지급합니다. 진행할까요?`
+      : `유저 선차감 ${comp.toLocaleString()}원을 유지하고, 기사에게 ${driverPay.toLocaleString()}원을 지급합니다. 진행할까요?`;
+    if (!confirm(msg)) return;
     btn.disabled = true;
-    // a) 유저 차감 (충전금 먼저, 부족분 포인트)
-    if (order?.buyer_id) {
-      const { data: user } = await db.from('users').select('charge_balance, point_balance').eq('id', order.buyer_id).maybeSingle();
-      if (user) {
-        const charge = user.charge_balance || 0;
-        const chargeDeduct = Math.min(charge, comp);
-        const pointDeduct = Math.max(0, comp - chargeDeduct);
-        await db.from('users').update({
-          charge_balance: charge - chargeDeduct,
-          point_balance: (user.point_balance || 0) - pointDeduct,
-        }).eq('id', order.buyer_id);
-      }
-    }
-    // b) 기사 보상
+    // a) 기사 지급
     if (order?.driver_id) {
-      const { data: driver } = await db.from('drivers').select('withdrawable_amount, today_earnings, total_earnings').eq('id', order.driver_id).maybeSingle();
+      const { data: driver } = await db.from('drivers').select('withdrawable_amount, today_earnings, total_earnings, user_id').eq('id', order.driver_id).maybeSingle();
       if (driver) {
         await db.from('drivers').update({
-          withdrawable_amount: (driver.withdrawable_amount||0) + comp,
-          today_earnings: (driver.today_earnings||0) + comp,
-          total_earnings: (driver.total_earnings||0) + comp,
+          withdrawable_amount: (driver.withdrawable_amount||0) + driverPay,
+          today_earnings: (driver.today_earnings||0) + driverPay,
+          total_earnings: (driver.total_earnings||0) + driverPay,
         }).eq('id', order.driver_id);
         await db.from('driver_compensations').insert({
           driver_id: order.driver_id,
-          amount: comp,
+          amount: driverPay,
           type: 'pickup_fail_compensation',
           description: '헛걸음(유저귀책) 보상',
           order_id: orderId,
         });
+        // 기사 개인 알림
+        if (driver.user_id) {
+          await db.from('notifications').insert({
+            user_id: driver.user_id,
+            target: 'driver',
+            type: 'system',
+            title: '헛걸음 보상이 지급됐어요',
+            body: `픽업 불가 신고가 확인되어 헛걸음 보상 ${driverPay.toLocaleString()}원이 지급됐어요.`,
+          });
+        }
       }
     }
-    // c) 주문 취소 + 취소수수료 기록
-    await db.from('orders').update({ status: 'cancelled', cancel_fee: comp }).eq('id', orderId);
+    // b) 주문 취소 (cancel_fee류는 이미 저장돼 있어 건드리지 않음)
+    await db.from('orders').update({ status: 'cancelled' }).eq('id', orderId);
   } else {
-    if (!confirm('기사 귀책으로 처리합니다. 유저는 전액 환불(차감 0), 기사 보상 없음. 진행할까요?')) return;
+    // 환급액: 실제 선차감된 charge/point 만큼만 정확히 복원
+    const rc = order?.cancel_fee_charge || 0;
+    const rp = order?.cancel_fee_point || 0;
+    const refund = rc + rp;
+    if (!confirm(`기사 귀책으로 처리합니다. 유저에게 선차감 ${refund.toLocaleString()}원을 환급하고, 기사 보상은 없습니다. 진행할까요?`)) return;
     btn.disabled = true;
-    await db.from('orders').update({ status: 'cancelled', cancel_fee: 0 }).eq('id', orderId);
+    // a) 유저 복원 (charge/point 각각 차감된 만큼 되돌림)
+    if (order?.buyer_id) {
+      const { data: user } = await db.from('users').select('charge_balance, point_balance').eq('id', order.buyer_id).maybeSingle();
+      if (user) {
+        await db.from('users').update({
+          charge_balance: (user.charge_balance || 0) + rc,
+          point_balance: (user.point_balance || 0) + rp,
+        }).eq('id', order.buyer_id);
+      }
+      // 유저 알림 (실제 차감이 있었던 경우만)
+      if (refund > 0) {
+        await db.from('notifications').insert({
+          user_id: order.buyer_id,
+          target: 'user',
+          type: 'system',
+          title: '차감이 취소됐어요',
+          body: `픽업 불가 신고가 반려되어 앞서 차감된 ${refund.toLocaleString()}원이 취소됐어요.`,
+        });
+      }
+    }
+    // b) 주문 취소 + 선차감 컬럼 초기화
+    await db.from('orders').update({ status: 'cancelled', cancel_fee: 0, cancel_fee_charge: 0, cancel_fee_point: 0 }).eq('id', orderId);
+    // c) 기사 개인 알림
+    if (order?.driver_id) {
+      const { data: driver } = await db.from('drivers').select('user_id').eq('id', order.driver_id).maybeSingle();
+      if (driver?.user_id) {
+        await db.from('notifications').insert({
+          user_id: driver.user_id,
+          target: 'driver',
+          type: 'system',
+          title: '픽업 불가 신고가 반려됐어요',
+          body: `픽업 불가 신고가 반려되어 보상이 지급되지 않았어요.`,
+        });
+      }
+    }
   }
   document.getElementById('pf-' + orderId)?.remove();
   alert('처리 완료!');
