@@ -1387,11 +1387,25 @@ async function loadPickupFails() {
 }
 
 async function resolvePickupFail(orderId, action, btn) {
-  const { data: order } = await db.from('orders').select('driver_id, delivery_fee').eq('id', orderId).maybeSingle();
-  const comp = Math.min(2000, Math.max(500, Math.floor((order?.delivery_fee || 0) * 0.2)));
-  if (!confirm(action === 'compensate' ? `기사에게 ${comp.toLocaleString()}원 보상 후 처리할까요?` : '취소 처리할까요?')) return;
-  btn.disabled = true;
+  const { data: order } = await db.from('orders').select('driver_id, delivery_fee, buyer_id').eq('id', orderId).maybeSingle();
+  const comp = Math.floor((order?.delivery_fee || 0) * 0.2);
   if (action === 'compensate') {
+    if (!confirm(`유저에게 ${comp.toLocaleString()}원 차감하고, 기사에게 ${comp.toLocaleString()}원 보상 후 처리할까요?`)) return;
+    btn.disabled = true;
+    // a) 유저 차감 (충전금 먼저, 부족분 포인트)
+    if (order?.buyer_id) {
+      const { data: user } = await db.from('users').select('charge_balance, point_balance').eq('id', order.buyer_id).maybeSingle();
+      if (user) {
+        const charge = user.charge_balance || 0;
+        const chargeDeduct = Math.min(charge, comp);
+        const pointDeduct = Math.max(0, comp - chargeDeduct);
+        await db.from('users').update({
+          charge_balance: charge - chargeDeduct,
+          point_balance: (user.point_balance || 0) - pointDeduct,
+        }).eq('id', order.buyer_id);
+      }
+    }
+    // b) 기사 보상
     if (order?.driver_id) {
       const { data: driver } = await db.from('drivers').select('withdrawable_amount, today_earnings, total_earnings').eq('id', order.driver_id).maybeSingle();
       if (driver) {
@@ -1404,13 +1418,18 @@ async function resolvePickupFail(orderId, action, btn) {
           driver_id: order.driver_id,
           amount: comp,
           type: 'pickup_fail_compensation',
-          description: '픽업 불가 보상',
+          description: '헛걸음(유저귀책) 보상',
           order_id: orderId,
         });
       }
     }
+    // c) 주문 취소 + 취소수수료 기록
+    await db.from('orders').update({ status: 'cancelled', cancel_fee: comp }).eq('id', orderId);
+  } else {
+    if (!confirm('기사 귀책으로 처리합니다. 유저는 전액 환불(차감 0), 기사 보상 없음. 진행할까요?')) return;
+    btn.disabled = true;
+    await db.from('orders').update({ status: 'cancelled', cancel_fee: 0 }).eq('id', orderId);
   }
-  await db.from('orders').update({ status: 'cancelled' }).eq('id', orderId);
   document.getElementById('pf-' + orderId)?.remove();
   alert('처리 완료!');
 }
