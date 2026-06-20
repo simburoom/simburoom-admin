@@ -519,20 +519,21 @@ async function loadPickupFails() {
     </div>`).join('');
 }
 async function resolvePickupFail(orderId, action, btn) {
-  if (!confirm(action === 'compensate' ? '기사에게 1,000원 보상 후 처리할까요?' : '취소 처리할까요?')) return;
+  const { data: order } = await db.from('orders').select('driver_id, delivery_fee').eq('id', orderId).maybeSingle();
+  const comp = Math.min(2000, Math.max(500, Math.floor((order?.delivery_fee || 0) * 0.2)));
+  if (!confirm(action === 'compensate' ? `기사에게 ${comp.toLocaleString()}원 보상 후 처리할까요?` : '취소 처리할까요?')) return;
   btn.disabled = true;
   if (action === 'compensate') {
-    const { data: order } = await db.from('orders').select('driver_id').eq('id', orderId).maybeSingle();
     if (order?.driver_id) {
       const { data: driver } = await db.from('drivers').select('withdrawable_amount, today_earnings, total_earnings').eq('id', order.driver_id).maybeSingle();
       if (driver) {
         await db.from('drivers').update({
-          withdrawable_amount: (driver.withdrawable_amount || 0) + 1000,
-          today_earnings: (driver.today_earnings || 0) + 1000,
-          total_earnings: (driver.total_earnings || 0) + 1000,
+          withdrawable_amount: (driver.withdrawable_amount || 0) + comp,
+          today_earnings: (driver.today_earnings || 0) + comp,
+          total_earnings: (driver.total_earnings || 0) + comp,
         }).eq('id', order.driver_id);
         await db.from('driver_compensations').insert({
-          driver_id: order.driver_id, amount: 1000, type: 'pickup_fail_compensation', description: '픽업 불가 보상', order_id: orderId,
+          driver_id: order.driver_id, amount: comp, type: 'pickup_fail_compensation', description: '픽업 불가 보상', order_id: orderId,
         });
       }
     }
