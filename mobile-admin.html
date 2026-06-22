@@ -463,7 +463,12 @@ async function loadDashboard() {
   document.getElementById('s-drivers').textContent = onlineDrivers || 0;
 
   const { count: waitingOrders } = await db.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'waiting');
-  document.getElementById('s-waiting').textContent = waitingOrders || 0;
+  const wEl = document.getElementById('s-waiting');
+  wEl.textContent = waitingOrders || 0;
+  // 부하 경고: 30건↑ 주황, 60건↑ 빨강
+  if ((waitingOrders||0) >= 60) { wEl.style.color = 'var(--red)'; }
+  else if ((waitingOrders||0) >= 30) { wEl.style.color = 'var(--orange)'; }
+  else { wEl.style.color = ''; }
 }
 
 /* ===== Drivers ===== */
