@@ -742,11 +742,15 @@ tbody tr:last-child td { border-bottom: none; }
         <div style="display:flex;flex-direction:column;gap:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:var(--bg2);border-radius:7px;">
             <span style="font-size:11px;color:var(--text2);">기사 가입</span>
-            <div style="display:flex;align-items:center;gap:4px;"><input class="form-input" id="policy-signup" value="5000" style="width:80px;text-align:right;padding:4px 8px;"><span style="font-size:10px;color:var(--text3);">원</span></div>
+            <div style="display:flex;align-items:center;gap:4px;"><input class="form-input" id="policy-signup" value="2000" style="width:80px;text-align:right;padding:4px 8px;"><span style="font-size:10px;color:var(--text3);">원</span></div>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:var(--bg2);border-radius:7px;">
             <span style="font-size:11px;color:var(--text2);">첫 배송 완료</span>
-            <div style="display:flex;align-items:center;gap:4px;"><input class="form-input" id="policy-first" value="5000" style="width:80px;text-align:right;padding:4px 8px;"><span style="font-size:10px;color:var(--text3);">원</span></div>
+            <div style="display:flex;align-items:center;gap:4px;"><input class="form-input" id="policy-first" value="4000" style="width:80px;text-align:right;padding:4px 8px;"><span style="font-size:10px;color:var(--text3);">원</span></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:var(--bg2);border-radius:7px;">
+            <span style="font-size:11px;color:var(--text2);">3건째 배송 완료</span>
+            <div style="display:flex;align-items:center;gap:4px;"><input class="form-input" id="policy-third" value="4000" style="width:80px;text-align:right;padding:4px 8px;"><span style="font-size:10px;color:var(--text3);">원</span></div>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:var(--bg2);border-radius:7px;">
             <span style="font-size:11px;color:var(--text2);">건당 보상</span>
@@ -791,6 +795,7 @@ tbody tr:last-child td { border-bottom: none; }
               <option value="">전체 유형</option>
               <option value="signup">🆕 기사 가입</option>
               <option value="first_delivery">🎉 첫 배송</option>
+              <option value="third_delivery">🎯 3건째 배송</option>
               <option value="per_delivery">📦 건당 보상</option>
               <option value="monthly_bonus">🏆 월 보너스</option>
             </select>
@@ -2607,8 +2612,8 @@ async function loadRebateDetail() {
     .order('created_at', { ascending: false });
   if (typeFilter) query = query.eq('type', typeFilter);
   const { data: rebates } = await query;
-  const typeMap = { signup:'🆕 기사 가입', first_delivery:'🎉 첫 배송', per_delivery:'📦 건당 보상', monthly_bonus:'🏆 월 보너스' };
-  const typeColor = { signup:'var(--blue)', first_delivery:'var(--green)', per_delivery:'var(--text2)', monthly_bonus:'var(--orange)' };
+  const typeMap = { signup:'🆕 기사 가입', first_delivery:'🎉 첫 배송', third_delivery:'🎯 3건째 배송', per_delivery:'📦 건당 보상', monthly_bonus:'🏆 월 보너스' };
+  const typeColor = { signup:'var(--blue)', first_delivery:'var(--green)', third_delivery:'var(--green)', per_delivery:'var(--text2)', monthly_bonus:'var(--orange)' };
   const total = (rebates||[]).reduce((s,r) => s + r.amount, 0);
   const byType = {};
   (rebates||[]).forEach(r => { byType[r.type] = (byType[r.type]||0) + r.amount; });
