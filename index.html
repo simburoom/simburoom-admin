@@ -2514,14 +2514,20 @@ async function createAgent() {
   const { error } = await db.from('agents').insert({ code, name, phone, region, bank_name, account_number, account_holder, temp_password });
   if (error) { alert('등록 실패: ' + error.message); return; }
   if (phone) {
-    const link = `https://simburoom.kr/agent.html?code=${code}`;
     await fetch(`${SUPABASE_URL}/functions/v1/send-dispatch-sms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` },
-      body: JSON.stringify({ phone, message: `[심부름] 대리점 포털 접속 정보\n코드: ${code}\n임시 비밀번호: ${temp_password}\n포털: ${link}\n\n첫 로그인 후 비밀번호를 변경해주세요.` })
+      body: JSON.stringify({
+        phone,
+        templateId: "KA01TP260622144244155HgbYcJbQEtl",
+        variables: {
+          "#{대리점코드}": code,
+          "#{임시비밀번호}": temp_password,
+        }
+      })
     });
   }
-  alert(`대리점 등록 완료!\n임시 비밀번호: ${temp_password}\nSMS 발송됨`);
+  alert(`대리점 등록 완료!\n임시 비밀번호: ${temp_password}\n알림톡 발송됨`);
   ['agent-code','agent-name','agent-phone','agent-region','agent-bank','agent-account','agent-holder'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   loadAgents();
 }
