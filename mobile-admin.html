@@ -204,7 +204,7 @@
           <label class="fl">은행</label><input id="agent-bank" placeholder="은행명">
           <label class="fl">계좌번호</label><input id="agent-account" placeholder="계좌번호">
           <label class="fl">예금주</label><input id="agent-holder" placeholder="예금주">
-          <button class="btn btn-brand btn-block" onclick="createAgent()">대리점 등록 + SMS 발송</button>
+          <button class="btn btn-brand btn-block" onclick="createAgent()">대리점 등록 + 알림톡 발송</button>
         </div>
         <div class="section-title">등록된 대리점</div>
         <div id="agent-list"><div class="empty">로딩 중...</div></div>
@@ -652,8 +652,7 @@ async function createAgent() {
   const { error } = await db.from('agents').insert({ code, name, phone, region, bank_name, account_number, account_holder, temp_password });
   if (error) { alert('등록 실패: ' + error.message); return; }
   if (phone) {
-    const link = `https://simburoom.kr/agent.html?code=${code}`;
-    await fetch(`${SUPABASE_URL}/functions/v1/send-dispatch-sms`, { method: 'POST', headers: smsHeaders(), body: JSON.stringify({ phone, message: `[심부름] 대리점 포털 접속 정보\n코드: ${code}\n임시 비밀번호: ${temp_password}\n포털: ${link}\n\n첫 로그인 후 비밀번호를 변경해주세요.` }) });
+    await fetch(`${SUPABASE_URL}/functions/v1/send-dispatch-sms`, { method: 'POST', headers: smsHeaders(), body: JSON.stringify({ phone, templateId: "KA01TP260622144244155HgbYcJbQEtl", variables: { "#{대리점코드}": code, "#{임시비밀번호}": temp_password } }) });
   }
   alert(`대리점 등록 완료!\n임시 비밀번호: ${temp_password}`);
   ['agent-code', 'agent-name', 'agent-phone', 'agent-region', 'agent-bank', 'agent-account', 'agent-holder'].forEach(id => document.getElementById(id).value = '');
