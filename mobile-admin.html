@@ -164,7 +164,15 @@
 
       <!-- DRIVERS -->
       <div id="view-drivers" class="view">
-        <div class="section-title">기사 승인 대기 <span id="pending-count"></span></div>
+        <div style="display:flex;gap:6px;margin-bottom:10px;">
+          <button class="btn btn-ghost" id="m-dtab-pending" onclick="switchDriverTabM('pending')" style="flex:1;">승인 대기 <span id="pending-count"></span></button>
+          <button class="btn btn-ghost" id="m-dtab-all" onclick="switchDriverTabM('all')" style="flex:1;">전체 기사</button>
+        </div>
+        <div id="m-driver-all-search" style="display:none;margin-bottom:8px;">
+          <input id="m-driver-phone-search" placeholder="📞 전화번호 검색 (예: 7985)"
+            style="width:100%;padding:8px 12px;background:var(--bg2,#1e1e2e);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;box-sizing:border-box;"
+            onkeyup="if(event.key==='Enter')loadAllDriversM()">
+        </div>
         <div id="driver-list"><div class="empty">로딩 중...</div></div>
       </div>
 
@@ -285,6 +293,14 @@
           <button class="btn btn-ghost btn-block" onclick="addPeakSlotM()">+ 추가</button>
           <button class="btn btn-brand btn-block" style="margin-top:10px;" onclick="savePeakScheduleM()">💾 저장</button>
         </div>
+        <div class="card">
+          <div class="section-title" style="margin-top:0;">배차 반경 설정</div>
+          <label class="fl">라운드별 콜 발송 반경 (미터). R1 → R2 → R3 순으로 넓어져야 합니다. 기본 3000/5000/7000</label>
+          <label class="fl">R1 (1차)</label><input type="number" id="m-radii-r0" placeholder="3000">
+          <label class="fl">R2 (2차)</label><input type="number" id="m-radii-r1" placeholder="5000">
+          <label class="fl">R3 (최종)</label><input type="number" id="m-radii-r2" placeholder="7000">
+          <button class="btn btn-brand btn-block" style="margin-top:10px;" onclick="saveDispatchRadiiM()">💾 저장</button>
+        </div>
       </div>
     </div>
 
@@ -300,13 +316,39 @@
 
 <script>
 const SUPABASE_URL = 'https://sppvrikqjufrdsrfcokx.supabase.co';
-const SUPABASE_SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNwcHZyaWtxanVmcmRzcmZjb2t4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTk5MDk1MywiZXhwIjoyMDk1NTY2OTUzfQ.jAbTIrv9SNjZX_Kfb54rhg7HdST2Bx71axg6saB6go0';
+const SUPABASE_ANON_KEY = 'sb_publishable_ymDWJMpm72sXwwcnA3STjQ_mMUCjVjL';
 const { createClient } = supabase;
-const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+});
+
+function getAccessToken() { return sessionStorage.getItem('admin_access_token') || ''; }
+async function setDbAuth(token) {
+  if (token) {
+    const refresh = sessionStorage.getItem('admin_refresh_token') || '';
+    await db.auth.setSession({ access_token: token, refresh_token: refresh });
+  } else {
+    await db.auth.signOut();
+  }
+}
+function smsHeaders() { return { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${getAccessToken()}` }; }
+async function callAdminAction(action, payload) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${getAccessToken()}` },
+    body: JSON.stringify({ action, payload })
+  });
+  let data = {};
+  try { data = await res.json(); } catch (_) {}
+  if (!res.ok) {
+    if (res.status === 401) throw new Error('세션이 만료됐어요. 다시 로그인해주세요. (401)');
+    throw new Error(data.error || data.message || data.msg || `요청 실패 (HTTP ${res.status})`);
+  }
+  return data;
+}
 
 const VEHICLE_LABELS = { motorcycle: '오토바이', bicycle: '자전거', kickboard: '킥보드', car: '자동차', walk: '도보' };
 function vehicleLabel(t) { return VEHICLE_LABELS[t] || t || '-'; }
-function smsHeaders() { return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` }; }
 function esc(s) { return (s == null ? '' : String(s)).replace(/'/g, "\\'"); }
 
 /* ===== Auth ===== */
@@ -324,35 +366,30 @@ function showSignup() {
   document.getElementById('signup-form').style.display = 'block';
 }
 async function login() {
-  const username = document.getElementById('login-username').value.trim();
+  const email = document.getElementById('login-username').value.trim();
   const password = document.getElementById('login-password').value;
   const msg = document.getElementById('login-msg');
   msg.className = 'auth-msg';
-  if (!username || !password) { msg.className = 'auth-msg error'; msg.textContent = '사용자명과 비밀번호를 입력해주세요.'; return; }
-  const hash = await hashPassword(password);
-  const { data, error } = await db.from('admin_users').select('id, username, is_approved, is_master').eq('username', username).eq('password_hash', hash).maybeSingle();
-  if (error || !data) { msg.className = 'auth-msg error'; msg.textContent = '사용자명 또는 비밀번호가 올바르지 않습니다.'; return; }
-  if (!data.is_approved) { msg.className = 'auth-msg error'; msg.textContent = '승인 대기 중입니다. 마스터 승인 후 이용 가능합니다.'; return; }
-  sessionStorage.setItem('admin_session', JSON.stringify({ id: data.id, username: data.username, is_master: data.is_master }));
-  applySession(data);
+  if (!email || !password) { msg.className = 'auth-msg error'; msg.textContent = '이메일과 비밀번호를 입력해주세요.'; return; }
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    if (!res.ok) { msg.className = 'auth-msg error'; msg.textContent = data.error || '로그인 실패'; return; }
+    sessionStorage.setItem('admin_session', JSON.stringify(data.session));
+    sessionStorage.setItem('admin_access_token', data.access_token);
+    sessionStorage.setItem('admin_refresh_token', data.refresh_token);
+    await setDbAuth(data.access_token);
+    applySession(data.session);
+  } catch(e) { msg.className = 'auth-msg error'; msg.textContent = '서버 오류: ' + e.message; }
 }
 async function signup() {
-  const username = document.getElementById('signup-username').value.trim();
-  const password = document.getElementById('signup-password').value;
-  const password2 = document.getElementById('signup-password2').value;
   const msg = document.getElementById('signup-msg');
-  msg.className = 'auth-msg';
-  if (!username || !password) { msg.className = 'auth-msg error'; msg.textContent = '모든 항목을 입력해주세요.'; return; }
-  if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) { msg.className = 'auth-msg error'; msg.textContent = '사용자명은 영문/숫자/언더스코어 3~20자여야 합니다.'; return; }
-  if (password.length < 6) { msg.className = 'auth-msg error'; msg.textContent = '비밀번호는 6자 이상이어야 합니다.'; return; }
-  if (password !== password2) { msg.className = 'auth-msg error'; msg.textContent = '비밀번호가 일치하지 않습니다.'; return; }
-  const hash = await hashPassword(password);
-  const { error } = await db.from('admin_users').insert({ username, password_hash: hash, is_approved: false, is_master: false });
-  if (error) { msg.className = 'auth-msg error'; msg.textContent = error.code === '23505' ? '이미 사용 중인 사용자명입니다.' : '오류가 발생했습니다.'; return; }
-  msg.className = 'auth-msg success'; msg.textContent = '가입 신청 완료. 마스터 승인 후 이용 가능합니다.';
-  document.getElementById('signup-username').value = '';
-  document.getElementById('signup-password').value = '';
-  document.getElementById('signup-password2').value = '';
+  msg.className = 'auth-msg error';
+  msg.textContent = '현재 관리자 계정은 마스터만 생성 가능합니다. 마스터에게 문의하세요.';
 }
 function applySession(session) {
   document.getElementById('auth').style.display = 'none';
@@ -361,9 +398,12 @@ function applySession(session) {
   document.getElementById('more-master').style.display = session.is_master ? 'flex' : 'none';
   loadDashboard();
 }
-function logout() {
+async function logout() {
   if (!confirm('로그아웃 하시겠습니까?')) return;
   sessionStorage.removeItem('admin_session');
+  sessionStorage.removeItem('admin_access_token');
+  sessionStorage.removeItem('admin_refresh_token');
+  await setDbAuth(null);
   document.getElementById('app').style.display = 'none';
   document.getElementById('auth').style.display = 'flex';
   document.getElementById('login-username').value = '';
@@ -384,7 +424,7 @@ function showTab(tab) {
   setView(tab);
   document.getElementById('topbar-title').textContent = TAB_TITLES[tab];
   if (tab === 'home') loadDashboard();
-  else if (tab === 'drivers') loadPendingDrivers();
+  else if (tab === 'drivers') switchDriverTabM('pending');
   else if (tab === 'orders') loadPickupFails();
   else if (tab === 'area') loadServiceAreas();
 }
@@ -395,7 +435,7 @@ function openSub(id) {
   else if (id === 'master') loadMasterSection();
   else if (id === 'coupons') loadCoupons();
   else if (id === 'notices') loadNotices();
-  else if (id === 'config') loadPeakScheduleM();
+  else if (id === 'config') { loadPeakScheduleM(); loadDispatchRadiiM(); }
 }
 function backToMore() {
   setView('more');
@@ -445,6 +485,30 @@ async function savePeakScheduleM() {
   alert('피크 차단 시간대가 저장됐어요!');
 }
 
+async function loadDispatchRadiiM() {
+  const { data } = await db.from('app_config').select('value').eq('key', 'dispatch_radii').maybeSingle();
+  let arr = [3000, 5000, 7000];
+  if (data?.value) {
+    const parsed = data.value.split(',').map(s => parseInt(s.trim(), 10));
+    if (parsed.length === 3 && parsed.every(n => Number.isFinite(n) && n > 0)) arr = parsed;
+  }
+  document.getElementById('m-radii-r0').value = arr[0];
+  document.getElementById('m-radii-r1').value = arr[1];
+  document.getElementById('m-radii-r2').value = arr[2];
+}
+
+async function saveDispatchRadiiM() {
+  const r0 = parseInt(document.getElementById('m-radii-r0').value, 10);
+  const r1 = parseInt(document.getElementById('m-radii-r1').value, 10);
+  const r2 = parseInt(document.getElementById('m-radii-r2').value, 10);
+  if (![r0, r1, r2].every(n => Number.isFinite(n) && n > 0)) { alert('세 값 모두 0보다 큰 숫자여야 합니다.'); return; }
+  if (!(r0 < r1 && r1 < r2)) { alert('반경은 R1 < R2 < R3 순으로 커져야 합니다.'); return; }
+  const value = `${r0},${r1},${r2}`;
+  const { error } = await db.from('app_config').upsert({ key: 'dispatch_radii', value, updated_at: new Date().toISOString() });
+  if (error) { alert('저장 실패: ' + error.message); return; }
+  alert('배차 반경이 저장됐어요! (' + value + ')');
+}
+
 /* ===== Dashboard ===== */
 async function loadDashboard() {
   const kstOffset = 9 * 60 * 60 * 1000;
@@ -473,9 +537,10 @@ async function loadDashboard() {
 
 /* ===== Drivers ===== */
 async function loadPendingDrivers() {
-  const { data } = await db.from('drivers').select('id, phone, name, vehicle_type, vehicle_number, license_url, insurance_url, insurance_expires_at, created_at').eq('is_approved', false).not('name', 'is', null).order('created_at', { ascending: true });
-  document.getElementById('pending-count').textContent = data ? '(' + data.length + ')' : '';
+  const { data, error } = await db.from('drivers').select('id, phone, name, vehicle_type, vehicle_number, license_url, insurance_url, insurance_expires_at, created_at').eq('is_approved', false).not('name', 'is', null).is('rejected_at', null).order('created_at', { ascending: true });
   const c = document.getElementById('driver-list');
+  if (error) { console.error('loadPendingDrivers error:', error); document.getElementById('pending-count').textContent = ''; c.innerHTML = '<div class="empty">불러오기 실패: ' + (error.message || error) + '</div>'; return; }
+  document.getElementById('pending-count').textContent = data ? '(' + data.length + ')' : '';
   if (!data || data.length === 0) { c.innerHTML = '<div class="empty">심사 대기 중인 기사가 없습니다</div>'; return; }
   c.innerHTML = data.map(d => `
     <div class="list-item" id="dc-${d.id}">
@@ -490,6 +555,57 @@ async function loadPendingDrivers() {
       </div>
     </div>`).join('');
 }
+
+let currentDriverTabM = 'pending';
+function switchDriverTabM(tab) {
+  currentDriverTabM = tab;
+  document.getElementById('m-dtab-pending').classList.toggle('btn-primary', tab === 'pending');
+  document.getElementById('m-dtab-all').classList.toggle('btn-primary', tab === 'all');
+  document.getElementById('m-driver-all-search').style.display = tab === 'all' ? 'block' : 'none';
+  if (tab === 'pending') loadPendingDrivers();
+  else loadAllDriversM();
+}
+
+async function loadAllDriversM() {
+  let query = db.from('drivers').select('id, name, phone, vehicle_type, vehicle_number, is_approved, is_online, today_earnings, withdrawable_amount, created_at').not('name', 'is', null).order('created_at', { ascending: false }).limit(100);
+  const phoneSearch = document.getElementById('m-driver-phone-search')?.value.trim();
+  if (phoneSearch) query = query.ilike('phone', `%${phoneSearch}%`);
+  const { data } = await query;
+  const c = document.getElementById('driver-list');
+  document.getElementById('pending-count').textContent = '';
+  if (!data || data.length === 0) { c.innerHTML = '<div class="empty">기사가 없습니다</div>'; return; }
+  // 오늘수익 실시간 재계산 (KST 당일치, orders + driver_compensations)
+  const kstOffset = 9*60*60*1000;
+  const kstNow = new Date(Date.now() + kstOffset);
+  const todayStart = new Date(Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate()) - kstOffset).toISOString();
+  const driverIds = data.map(d => d.id);
+  const { data: todayOrders } = await db.from('orders').select('driver_id, delivery_fee').in('driver_id', driverIds).eq('status','completed').gte('completed_at', todayStart);
+  const { data: todayComps } = await db.from('driver_compensations').select('driver_id, amount').in('driver_id', driverIds).gte('created_at', todayStart);
+  const earnMap = {};
+  (todayOrders||[]).forEach(o => { earnMap[o.driver_id] = (earnMap[o.driver_id]||0) + Math.floor((o.delivery_fee||0)*0.8); });
+  (todayComps||[]).forEach(c => { earnMap[c.driver_id] = (earnMap[c.driver_id]||0) + (c.amount||0); });
+  c.innerHTML = data.map(d => `
+    <div class="list-item" id="dc-${d.id}">
+      <div class="li-title">🛵 ${d.name || '(이름 없음)'} · ${d.phone}</div>
+      <div class="li-sub">${vehicleLabel(d.vehicle_type)} · ${d.vehicle_number || '-'} · ${d.is_approved ? '<span class="badge green">승인</span>' : '<span class="badge orange">대기</span>'} · ${d.is_online ? '<span class="badge green">온라인</span>' : '<span class="badge gray">오프라인</span>'}</div>
+      <div class="li-sub">오늘수익 ${(earnMap[d.id]||0).toLocaleString()}원 · 출금가능 ${(d.withdrawable_amount||0).toLocaleString()}원</div>
+      <div class="li-actions">
+        <button class="btn btn-red" onclick="blockDriverM('${d.id}','${esc(d.name||'')}',this)">🚫 차단</button>
+      </div>
+    </div>`).join('');
+}
+
+async function blockDriverM(id, name, btn) {
+  if (!confirm((name||'이 기사') + '님을 차단(미승인 처리)하시겠습니까?')) return;
+  const reason = prompt('차단 사유를 입력해주세요:');
+  if (!reason) return;
+  btn.disabled = true; btn.textContent = '처리 중...';
+  try {
+    await callAdminAction('rejectDriver', { driverId: id, reason });
+    document.getElementById('dc-' + id)?.remove();
+    alert('차단 처리 완료');
+  } catch(e) { btn.disabled = false; btn.textContent = '🚫 차단'; alert('처리 실패: ' + e.message); }
+}
 async function approveDriver(id, phone, btn) {
   btn.disabled = true; btn.textContent = '처리 중...';
   await db.from('drivers').update({ is_approved: true }).eq('id', id);
@@ -498,18 +614,54 @@ async function approveDriver(id, phone, btn) {
   alert('승인 완료!');
 }
 async function rejectDriver(id, phone, btn) {
-  const reason = prompt('거절 사유를 입력해주세요:');
+  const reason = prompt('반려 사유를 입력해주세요:');
   if (!reason) return;
   btn.disabled = true; btn.textContent = '처리 중...';
-  await db.from('drivers').delete().eq('id', id);
-  await fetch(`${SUPABASE_URL}/functions/v1/send-rejection-sms`, { method: 'POST', headers: smsHeaders(), body: JSON.stringify({ phone, reason }) });
-  document.getElementById('dc-' + id)?.remove();
-  alert('거절 처리 완료!');
+  try {
+    await callAdminAction('rejectDriver', { driverId: id, reason });
+    await fetch(`${SUPABASE_URL}/functions/v1/send-rejection-sms`, { method: 'POST', headers: smsHeaders(), body: JSON.stringify({ phone, reason }) });
+    document.getElementById('dc-' + id)?.remove();
+    alert('반려 처리 완료 (재심사 가능)');
+  } catch(e) { btn.disabled = false; btn.textContent = '❌ 거절'; alert('처리 실패: ' + e.message); }
 }
 
 /* ===== Pickup fail ===== */
+// 증거사진 3장(jsonb 배열) 대조 UI. 모바일이라 작은 썸네일 + 가로 스크롤.
+const PF_PHOTO_LABELS = ['1. 물건 자리', '2. 주변', '3. 위치 식별'];
+function pfThumb(url, w) {
+  return url
+    ? `<img src="${url}" onclick="window.open('${url}','_blank')" style="width:${w}px;height:${w}px;object-fit:cover;border-radius:8px;border:1px solid var(--border);display:block;" />`
+    : `<div style="width:${w}px;height:${w}px;border-radius:8px;border:1px dashed var(--border);background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text3);text-align:center;">없음</div>`;
+}
+// 유저가 등록한 물건 사진(있어야 할 모습) — 단일 URL
+function renderPfUserPhoto(url) {
+  const header = `<div style="font-size:11px;font-weight:700;color:var(--text3);margin:8px 0 6px;">📦 유저 등록 (있어야 할 모습)</div>`;
+  const body = url
+    ? pfThumb(url, 90)
+    : `<div style="width:90px;height:90px;border-radius:8px;border:1px dashed var(--border);background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text3);text-align:center;padding:6px;">유저 등록<br>사진 없음</div>`;
+  return `<div>${header}${body}</div>`;
+}
+// 기사 현장 증거 3장
+function renderPfPhotos(photos) {
+  const arr = Array.isArray(photos) ? photos.filter(u => typeof u === 'string' && u) : [];
+  const count = arr.length;
+  const header = count < 3
+    ? `<div style="font-size:11px;font-weight:700;color:var(--red);margin:8px 0 6px;">🛵 기사 현장 · ⚠️ 증거사진 부족 (${count}/3)</div>`
+    : `<div style="font-size:11px;font-weight:700;color:var(--text3);margin:8px 0 6px;">🛵 기사 현장 (3/3)</div>`;
+  const slots = [0, 1, 2].map(i =>
+    `<div style="display:flex;flex-direction:column;gap:4px;align-items:center;flex:0 0 auto;">${pfThumb(arr[i], 90)}<div style="font-size:10px;color:var(--text3);">${PF_PHOTO_LABELS[i]}</div></div>`
+  ).join('');
+  return `<div>${header}<div style="display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;">${slots}</div></div>`;
+}
+// 비교 레이아웃: 유저 등록(위) vs 기사 현장(아래) — 모바일 세로 배치
+function renderPfCompare(o) {
+  return `<div style="margin-top:4px;">`
+    + `${renderPfUserPhoto(o.seller_item_photo_url)}`
+    + `<div style="border-top:1px solid var(--border);margin-top:8px;">${renderPfPhotos(o.pickup_fail_photos)}</div>`
+    + `</div>`;
+}
 async function loadPickupFails() {
-  const { data } = await db.from('orders').select('id, pickup_dong, delivery_dong, delivery_fee, seller_phone, fail_reason, created_at').eq('status', 'pickup_failed').order('created_at', { ascending: false });
+  const { data } = await db.from('orders').select('id, pickup_dong, delivery_dong, delivery_fee, seller_phone, fail_reason, created_at, pickup_fail_photos, seller_item_photo_url').eq('status', 'pickup_failed').order('created_at', { ascending: false });
   const c = document.getElementById('pickupfail-list');
   if (!data || data.length === 0) { c.innerHTML = '<div class="empty">픽업 불가 신고 없음</div>'; return; }
   c.innerHTML = data.map(o => `
@@ -517,6 +669,7 @@ async function loadPickupFails() {
       <div class="li-title">${o.pickup_dong || '-'} → ${o.delivery_dong || '-'}</div>
       <div class="li-sub"><span style="color:var(--brand);font-weight:700;">${o.fail_reason || '-'}</span> · ${(o.delivery_fee || 0).toLocaleString()}원 · ${o.seller_phone || '-'}</div>
       <div class="li-sub">${new Date(o.created_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</div>
+      ${renderPfCompare(o)}
       <div class="li-actions">
         <button class="btn btn-green" onclick="resolvePickupFail('${o.id}','compensate',this)">✅ 보상처리</button>
         <button class="btn btn-ghost" onclick="resolvePickupFail('${o.id}','cancel',this)">❌ 취소처리</button>
@@ -527,22 +680,23 @@ async function resolvePickupFail(orderId, action, btn) {
   const { data: order } = await db.from('orders').select('driver_id, buyer_id, cancel_fee, cancel_fee_charge, cancel_fee_point, delivery_fee, order_type').eq('id', orderId).maybeSingle();
   const comp = order?.cancel_fee || 0;
   if (action === 'compensate') {
-    // 기사 지급액: buy는 회사 부담(배송비 20%), sell은 유저 선차감액(comp)
-    const driverPay = order?.order_type === 'buy' ? Math.floor((order?.delivery_fee || 0) * 0.2) : comp;
-    const msg = order?.order_type === 'buy'
-      ? `기사에게 ${driverPay.toLocaleString()}원을 지급합니다. 진행할까요?`
-      : `유저 선차감 ${comp.toLocaleString()}원을 유지하고, 기사에게 ${driverPay.toLocaleString()}원을 지급합니다. 진행할까요?`;
+    // 기사 지급액: buy/sell 모두 유저 선차감액(cancel_fee)으로 보상.
+    // report-pickup-fail(①)이 신고 시점에 buy/sell 구분 없이 0.2F를 유저에게서 선차감해 cancel_fee에 기록하므로,
+    // 그 금액을 그대로 기사에게 전달한다(회사 별도 부담 아님).
+    const driverPay = comp;
+    const msg = `유저 선차감액(헛걸음 차감) ${comp.toLocaleString()}원을 기사 보상으로 지급합니다. (회사 별도 부담 아님) 진행할까요?`;
     if (!confirm(msg)) return;
     btn.disabled = true;
     // a) 기사 지급
     if (order?.driver_id) {
       const { data: driver } = await db.from('drivers').select('withdrawable_amount, today_earnings, total_earnings, user_id').eq('id', order.driver_id).maybeSingle();
       if (driver) {
-        await db.from('drivers').update({
+        const { error: payErr } = await db.from('drivers').update({
           withdrawable_amount: (driver.withdrawable_amount || 0) + driverPay,
           today_earnings: (driver.today_earnings || 0) + driverPay,
           total_earnings: (driver.total_earnings || 0) + driverPay,
         }).eq('id', order.driver_id);
+        if (payErr) console.log('기사 지급 실패:', payErr.message || JSON.stringify(payErr));
         await db.from('driver_compensations').insert({
           driver_id: order.driver_id, amount: driverPay, type: 'pickup_fail_compensation', description: '헛걸음(유저귀책) 보상', order_id: orderId,
         });
@@ -557,7 +711,8 @@ async function resolvePickupFail(orderId, action, btn) {
       }
     }
     // b) 주문 취소 (cancel_fee류는 이미 저장돼 있어 건드리지 않음)
-    await db.from('orders').update({ status: 'cancelled' }).eq('id', orderId);
+    const { error: cancelErr } = await db.from('orders').update({ status: 'cancelled', pickup_fail_resolution: 'compensated' }).eq('id', orderId);
+    if (cancelErr) console.log('주문 취소 실패:', cancelErr.message || JSON.stringify(cancelErr));
   } else {
     // 환급액: 실제 선차감된 charge/point 만큼만 정확히 복원
     const rc = order?.cancel_fee_charge || 0;
@@ -584,7 +739,7 @@ async function resolvePickupFail(orderId, action, btn) {
       }
     }
     // b) 주문 취소 + 선차감 컬럼 초기화
-    await db.from('orders').update({ status: 'cancelled', cancel_fee: 0, cancel_fee_charge: 0, cancel_fee_point: 0 }).eq('id', orderId);
+    await db.from('orders').update({ status: 'cancelled', cancel_fee: 0, cancel_fee_charge: 0, cancel_fee_point: 0, pickup_fail_resolution: 'rejected' }).eq('id', orderId);
     // c) 기사 개인 알림
     if (order?.driver_id) {
       const { data: driver } = await db.from('drivers').select('user_id').eq('id', order.driver_id).maybeSingle();
@@ -604,6 +759,12 @@ async function resolvePickupFail(orderId, action, btn) {
 /* ===== Service areas ===== */
 async function loadServiceAreas() {
   const { data: areas } = await db.from('service_areas').select('*').order('district');
+  const { data: driverCounts } = await db.from('drivers').select('service_area').eq('is_approved', true);
+  const driverCountMap = {};
+  (driverCounts || []).forEach(d => { driverCountMap[d.service_area] = (driverCountMap[d.service_area] || 0) + 1; });
+  const { data: demands } = await db.from('area_demand').select('district, type');
+  const demandMap = {};
+  (demands || []).forEach(d => { if (!demandMap[d.district]) demandMap[d.district] = { user: 0, driver: 0 }; demandMap[d.district][d.type] = (demandMap[d.district][d.type] || 0) + 1; });
   const c = document.getElementById('area-list');
   if (!areas || areas.length === 0) { c.innerHTML = '<div class="empty">등록된 지역 없음</div>'; return; }
   const seoul = areas.filter(a => a.district.includes('구') && a.district !== '대구');
@@ -612,6 +773,7 @@ async function loadServiceAreas() {
     <div class="area-row">
       <span class="area-name">${a.district}</span>
       <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:10px;color:var(--text3);">기사 ${driverCountMap[a.district]||0}명 / 수요신청 ${(demandMap[a.district]?.user||0)+(demandMap[a.district]?.driver||0)}건</span>
         <span class="area-state" style="color:${a.is_open ? 'var(--green)' : 'var(--text3)'};">${a.is_open ? '오픈' : '준비중'}</span>
         <div class="toggle ${a.is_open ? 'on' : ''}" data-id="${a.id}" data-open="${a.is_open}" onclick="toggleArea(this.dataset.id, this.dataset.open === 'true', this)"></div>
       </div>
@@ -814,10 +976,19 @@ async function deleteNotice(id) {
 }
 
 /* ===== Init ===== */
-(function init() {
+(async function init() {
   const saved = sessionStorage.getItem('admin_session');
-  if (saved) {
-    try { applySession(JSON.parse(saved)); return; } catch (e) {}
+  const token = sessionStorage.getItem('admin_access_token');
+  if (saved && token) {
+    try {
+      await setDbAuth(token);
+      applySession(JSON.parse(saved));
+      return;
+    } catch (e) {
+      sessionStorage.removeItem('admin_session');
+      sessionStorage.removeItem('admin_access_token');
+      sessionStorage.removeItem('admin_refresh_token');
+    }
   }
   showLogin();
 })();
