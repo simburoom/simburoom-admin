@@ -878,6 +878,15 @@ tbody tr:last-child td { border-bottom: none; }
         <button class="btn btn-primary" onclick="saveDispatchRadii()">💾 저장</button>
       </div>
       <div class="card">
+        <div class="card-title">주문 최대거리 설정</div>
+        <div class="setting-info" style="margin-bottom:10px;"><div class="s-title">보내는 곳 ↔ 받는 곳 최대 허용 거리 (미터)</div><div class="s-desc">비워두면 배차 반경의 마지막 값(R3)을 사용합니다.</div></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          <input type="number" id="max-order-distance" class="form-input" style="width:120px;" placeholder="7000">
+          <span style="color:var(--text3);font-size:11px;">m</span>
+        </div>
+        <button class="btn btn-primary" onclick="saveMaxOrderDistance()">💾 저장</button>
+      </div>
+      <div class="card">
         <div class="card-title">사업자 정보</div>
         <div style="display:flex;flex-direction:column;gap:8px;">
           <div style="display:flex;justify-content:space-between;"><span style="font-size:10px;color:var(--text3);">상호</span><span style="font-size:11px;color:var(--text);">심부름</span></div>
@@ -1003,7 +1012,7 @@ function showSection(id, el) {
   else if (id === 'map') loadMap();
   else if (id === 'service_area') loadServiceAreas();
   else if (id === 'master') loadMasterSection();
-  else if (id === 'config') { loadPeakSchedule(); loadDispatchRadii(); }
+  else if (id === 'config') { loadPeakSchedule(); loadDispatchRadii(); loadMaxOrderDistance(); }
 }
 
 function refreshCurrentSection() {
@@ -2933,6 +2942,43 @@ async function saveDispatchRadii() {
   const { error } = await db.from('app_config').upsert({ key: 'dispatch_radii', value, updated_at: new Date().toISOString() });
   if (error) { alert('저장 실패: ' + error.message); return; }
   alert('배차 반경이 저장됐어요! (' + value + ')');
+}
+
+async function loadMaxOrderDistance() {
+  const { data } = await db.from('app_config').select('key, value').in('key', ['max_order_distance', 'dispatch_radii']);
+  let radiiLast = 7000;
+  let maxVal = '';
+  (data || []).forEach(row => {
+    if (row.key === 'dispatch_radii' && row.value) {
+      const parsed = row.value.split(',').map(s => parseInt(s.trim(), 10));
+      if (parsed.length === 3 && parsed.every(n => Number.isFinite(n) && n > 0)) radiiLast = parsed[2];
+    } else if (row.key === 'max_order_distance' && row.value != null && String(row.value).trim() !== '') {
+      const n = parseInt(String(row.value).trim(), 10);
+      if (Number.isFinite(n) && n > 0) maxVal = String(n);
+    }
+  });
+  const input = document.getElementById('max-order-distance');
+  if (!input) return;
+  input.placeholder = String(radiiLast);   // 비워두면 이 값(R3)이 적용됨을 안내
+  input.value = maxVal;
+}
+
+async function saveMaxOrderDistance() {
+  const raw = (document.getElementById('max-order-distance').value || '').trim();
+  // 비워두면 max_order_distance 행을 삭제 → 유저앱이 dispatch_radii의 마지막 값(R3)을 사용
+  if (raw === '') {
+    const { error } = await db.from('app_config').delete().eq('key', 'max_order_distance');
+    if (error) { alert('저장 실패: ' + error.message); return; }
+    alert('주문 최대거리를 비웠어요. 이제 배차 반경의 마지막 값(R3)을 사용합니다.');
+    loadMaxOrderDistance();
+    return;
+  }
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) { alert('0보다 큰 숫자를 입력하거나, 비워두세요.'); return; }
+  const { error } = await db.from('app_config').upsert({ key: 'max_order_distance', value: String(n), updated_at: new Date().toISOString() });
+  if (error) { alert('저장 실패: ' + error.message); return; }
+  alert('주문 최대거리가 저장됐어요! (' + n + 'm)');
+  loadMaxOrderDistance();
 }
 
 // ===== 인증 =====
