@@ -1036,13 +1036,13 @@ async function loadServiceAreas() {
     demandMap[d.district][d.type] = (demandMap[d.district][d.type] || 0) + 1;
   });
 
-  // 서울 지역 목록
-  const seoul = (areas || []).filter(a => a.district.includes('구') && a.district !== '대구');
-  const others = (areas || []).filter(a => !a.district.includes('구') || a.district === '대구');
+  // 서울/그 외 지역 분류 (sido 기준)
+  const seoul = (areas || []).filter(a => a.sido === '서울');
+  const others = (areas || []).filter(a => a.sido !== '서울');
 
   const seoulRows = seoul.map(a => `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
-      <span style="font-size:12px;font-weight:700;color:var(--text);">${a.district}</span>
+      <span style="font-size:12px;font-weight:700;color:var(--text);">${a.sigungu}</span>
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="font-size:10px;color:var(--text3);">기사 ${driverCountMap[a.district]||0}명 / 수요신청 ${(demandMap[a.district]?.user||0)+(demandMap[a.district]?.driver||0)}건</span>
         <div class="toggle ${a.is_open ? 'on' : ''}" data-id="${a.id}" data-open="${a.is_open}" data-district="${a.district}" onclick="toggleServiceArea(this.dataset.id, this.dataset.open === 'true', this.dataset.district, this)"></div>
@@ -1053,7 +1053,7 @@ async function loadServiceAreas() {
 
   const othersRows = others.map(a => `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
-      <span style="font-size:12px;font-weight:700;color:var(--text);">${a.district}</span>
+      <span style="font-size:12px;font-weight:700;color:var(--text);">${a.sido} ${a.sigungu}</span>
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="font-size:10px;color:var(--text3);">기사 ${driverCountMap[a.district]||0}명 / 수요신청 ${(demandMap[a.district]?.user||0)+(demandMap[a.district]?.driver||0)}건</span>
         <div class="toggle ${a.is_open ? 'on' : ''}" data-id="${a.id}" data-open="${a.is_open}" data-district="${a.district}" onclick="toggleServiceArea(this.dataset.id, this.dataset.open === 'true', this.dataset.district, this)"></div>
@@ -1105,8 +1105,11 @@ async function toggleServiceArea(id, currentOpen, district, el) {
 async function openDistrictWithNotify(district) {
   if (!confirm(`${district} 지역을 오픈하고 해당 지역 기사/유저에게 알림을 발송할까요?`)) return;
 
-  // 지역 오픈
-  await db.from('service_areas').update({ is_open: true, opened_at: new Date().toISOString() }).eq('district', district);
+  // 지역 오픈 (id 기준 — 더 안전. district는 sigungu와 동일하므로 sigungu로 행을 찾는다)
+  const { data: areaRow } = await db.from('service_areas').select('id').eq('sigungu', district).maybeSingle();
+  if (areaRow) {
+    await db.from('service_areas').update({ is_open: true, opened_at: new Date().toISOString() }).eq('id', areaRow.id);
+  }
 
   // 해당 지역 기사 푸시 토큰 조회
   const { data: drivers } = await db.from('drivers').select('push_token').eq('service_area', district).not('push_token', 'is', null);
