@@ -636,19 +636,21 @@ tbody tr:last-child td { border-bottom: none; }
     <div class="inner-tabs">
       <button class="inner-tab active" onclick="switchRefundTab('pending', this)">대기 중 <span id="refund-pending-count"></span></button>
       <button class="inner-tab" onclick="switchRefundTab('completed', this)">완료</button>
+      <button class="inner-tab" onclick="switchRefundTab('partial', this)">부분 실패</button>
       <button class="inner-tab" onclick="switchRefundTab('failed', this)">실패</button>
     </div>
     <div id="refund-pending">
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>전화번호</th><th>환불금액</th><th>NicePay TID</th><th>주문번호</th><th>신청일</th><th>처리</th></tr></thead>
-            <tbody id="refund-tbody"><tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px;">로딩 중...</td></tr></tbody>
+            <thead><tr><th>전화번호</th><th>환불금액</th><th>취소 가능 내역</th><th>신청일</th><th>처리</th></tr></thead>
+            <tbody id="refund-tbody"><tr><td colspan="5" style="text-align:center;color:var(--text3);padding:24px;">로딩 중...</td></tr></tbody>
           </table>
         </div>
       </div>
     </div>
     <div id="refund-completed" style="display:none;"></div>
+    <div id="refund-partial" style="display:none;"></div>
     <div id="refund-failed" style="display:none;"></div>
   </div>
 
@@ -1643,16 +1645,15 @@ async function loadUsers() {
       <td style="color:var(--green);font-weight:700;">${((u.charge_balance||0)+(u.point_balance||0)).toLocaleString()}원<br><span style="font-size:9px;color:var(--text3);font-weight:400;">충전 ${(u.charge_balance||0).toLocaleString()} / 포인트 ${(u.point_balance||0).toLocaleString()}</span></td>
       <td>${u.marketing_agreed ? '<span class="badge green">동의</span>' : '<span class="badge gray">미동의</span>'}</td>
       <td style="font-size:10px;color:var(--text3);">${new Date(u.created_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})}</td>
-      <td><button class="btn btn-ghost" style="padding:3px 8px;font-size:9px;" onclick="adjustBalance('${u.id}', '${u.phone}')">잔액조정</button></td>
+      <td><button class="btn btn-ghost" style="padding:3px 8px;font-size:9px;" onclick="adjustBalance('${u.id}', '${u.phone}')">포인트 지급</button></td>
     </tr>`).join('');
 }
 
 async function adjustBalance(userId, phone) {
-  const type = prompt(phone + '님 잔액 조정\n조정 유형 입력:\n1 = 충전금(charge_balance)\n2 = 포인트(point_balance)');
-  if (!type || (type !== '1' && type !== '2')) { alert('1 또는 2를 입력해주세요.'); return; }
-  const col = type === '1' ? 'charge_balance' : 'point_balance';
-  const label = type === '1' ? '충전금' : '포인트';
-  const amount = prompt(phone + '님 ' + label + ' 조정\n조정할 금액 입력 (+ 또는 - 가능, 예: 10000 또는 -5000):');
+  // 포인트 전용. 충전금(charge_balance)은 실제 나이스 결제로만 생성돼야 하므로 어드민 지급 대상에서 제외.
+  const col = 'point_balance';
+  const label = '포인트';
+  const amount = prompt(phone + '님 ' + label + ' 지급/조정\n조정할 금액 입력 (+ 또는 - 가능, 예: 10000 또는 -5000):');
   if (!amount) return;
   const delta = parseInt(amount);
   if (isNaN(delta)) { alert('올바른 숫자를 입력해주세요.'); return; }
@@ -1660,7 +1661,7 @@ async function adjustBalance(userId, phone) {
     const { newBalance } = await callAdminAction('adjustBalance', { userId, col, delta });
     alert(label + ' 조정 완료: ' + newBalance.toLocaleString() + '원');
     loadUsers();
-  } catch(e) { alert('잔액 조정 실패: ' + e.message); }
+  } catch(e) { alert('포인트 조정 실패: ' + e.message); }
 }
 
 // ===== 기사 관리 =====
@@ -2580,15 +2581,33 @@ async function loadPendingRefunds() {
   if (refundRange.gte) query = query.gte('created_at', refundRange.gte);
   if (refundRange.lte) query = query.lte('created_at', refundRange.lte);
   const { data } = await query;
-  if (!data || data.length === 0) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px;">환불 요청 없음</td></tr>'; return; }
+  if (!data || data.length === 0) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:24px;">환불 요청 없음</td></tr>'; return; }
   let rows = '';
   for (const r of data) {
-    const { data: charge } = await db.from('charge_history').select('nicepay_tid, nicepay_order_id').eq('user_id', r.user_id).order('created_at', { ascending: false }).limit(1).maybeSingle();
+    // 해당 유저의 charge_history 전체 조회(최신순, tid 있는 것만) → 취소가능액 산출
+    const { data: charges } = await db.from('charge_history')
+      .select('nicepay_tid, amount, cancelled_amount, created_at')
+      .eq('user_id', r.user_id)
+      .not('nicepay_tid', 'is', null)
+      .order('created_at', { ascending: false });
+    const cList = (charges || [])
+      .map(c => ({ tid: c.nicepay_tid, amount: c.amount || 0, cancelled: c.cancelled_amount || 0, avail: (c.amount || 0) - (c.cancelled_amount || 0) }))
+      .filter(c => c.avail > 0);
+    const totalAvail = cList.reduce((s, c) => s + c.avail, 0);
+    const insufficient = r.amount > totalAvail;
+
+    const detailLines = cList.length
+      ? cList.map(c => `<div style="color:var(--text3);font-family:monospace;">${String(c.tid).slice(0,12)}… / 충전 ${c.amount.toLocaleString()} / 취소됨 ${c.cancelled.toLocaleString()} / 가능 ${c.avail.toLocaleString()}</div>`).join('')
+      : '<div style="color:var(--text3);">취소 가능한 충전 없음</div>';
+
     rows += `<tr id="refund-${r.id}">
       <td style="color:var(--text);">${r.users?.phone||'-'}</td>
       <td style="color:var(--primary);font-weight:700;">${r.amount.toLocaleString()}원</td>
-      <td style="font-family:monospace;font-size:10px;color:var(--blue);">${charge?.nicepay_tid||'없음'}</td>
-      <td style="font-family:monospace;font-size:10px;color:var(--text3);">${charge?.nicepay_order_id||'-'}</td>
+      <td style="font-size:10px;">
+        <div style="font-weight:700;color:${insufficient?'var(--red)':'var(--green)'};">취소 가능 총액: ${totalAvail.toLocaleString()}원</div>
+        ${insufficient ? '<div style="color:var(--red);font-weight:700;">⚠️ 취소 가능액 부족 - 자동 환불 불가</div>' : ''}
+        ${detailLines}
+      </td>
       <td style="font-size:10px;color:var(--text3);">${new Date(r.created_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})}</td>
       <td style="display:flex;gap:4px;">
         <button class="btn btn-green" style="padding:4px 9px;font-size:10px;" onclick="completeRefund('${r.id}','${r.user_id}',${r.amount},this)">✅ 환불완료</button>
@@ -2600,22 +2619,58 @@ async function loadPendingRefunds() {
 }
 
 async function completeRefund(id, userId, amount, btn) {
-  if (!confirm(`${amount.toLocaleString()}원 환불 완료 처리할까요?\n⚠ NicePay 대시보드에서 실제 환불을 먼저 처리하셨나요?`)) return;
+  if (!confirm(`${amount.toLocaleString()}원을 자동으로 환불 처리할까요?\n\n나이스페이 결제가 실제로 취소됩니다.\n(대시보드에서 수동으로 취소할 필요 없습니다)`)) return;
+  const prevText = btn.textContent;
   btn.disabled = true; btn.textContent = '처리중...';
-  await db.from('refund_requests').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', id);
-  await db.from('notifications').insert({
-    user_id: userId,
-    target: 'user',
-    type: 'system',
-    title: '환불 완료',
-    body: `신청하신 ${amount.toLocaleString()}원이 환불 처리되었습니다. 영업일 기준 3-5일 내 입금됩니다.`,
+
+  // 실제 카드 취소 + DB 반영 + 유저 알림은 모두 nicepay-cancel Edge Function이 처리한다.
+  // (notifications insert도 함수 내부에서 하므로 여기선 하지 않는다 — 중복 알림 방지)
+  const { data: result, error } = await db.functions.invoke('nicepay-cancel', {
+    body: { refundRequestId: id }
   });
-  document.getElementById('refund-' + id)?.remove();
-  alert('환불 완료 처리됐습니다!');
+
+  if (error) {
+    alert('환불 처리 실패: ' + error.message);
+    btn.disabled = false; btn.textContent = prevText;
+    return;
+  }
+
+  // 이미 처리된 건(멱등성) — 함수가 취소를 재실행하지 않음
+  if (result && result.alreadyProcessed) {
+    alert('이미 처리된 환불 건입니다.');
+    loadRefunds();
+    return;
+  }
+
+  // 전부 성공
+  if (result && result.success === true) {
+    alert(`환불 완료! ${result.cancelled.toLocaleString()}원이 취소되었습니다.`);
+    document.getElementById('refund-' + id)?.remove();
+    loadRefunds();
+    return;
+  }
+
+  // 일부만 성공 → 나머지는 수동 취소 필요(경고)
+  if (result && result.partial === true) {
+    alert(`⚠️ 일부만 환불되었습니다.\n\n성공: ${result.cancelled.toLocaleString()}원\n실패(수동 처리 필요): ${result.remaining.toLocaleString()}원\n\n나이스페이 대시보드에서 나머지 금액을 수동 취소해주세요.\n\n상세:\n` + JSON.stringify(result.detail.failed, null, 2));
+    loadRefunds();
+    return;
+  }
+
+  // 취소 가능한 결제 내역 부족 → 아무것도 취소/복구하지 않음(충전금 그대로 유지)
+  if (result && result.success === false && result.available !== undefined) {
+    alert(`⚠️ 자동 환불 불가\n\n취소 가능한 결제 내역이 부족합니다.\n\n요청액: ${result.requested.toLocaleString()}원\n취소 가능액: ${result.available.toLocaleString()}원\n\n나이스페이 대시보드에서 수동 확인이 필요합니다.\n(충전금은 차감된 상태로 유지됩니다)`);
+    btn.disabled = false; btn.textContent = prevText;
+    return;
+  }
+
+  // 전부 실패(충전금은 함수에서 복구됨)
+  alert('환불 실패: ' + ((result && result.error) || '알 수 없는 오류') + '\n\n충전금은 복구되었습니다.\n\n상세:\n' + JSON.stringify((result && result.detail) || {}, null, 2));
   loadRefunds();
 }
 
 async function failRefund(id, btn) {
+  if (!confirm('⚠️ 나이스페이에서 이미 취소가 나갔다면 이 버튼을 누르지 마세요.\n충전금이 복구되어 이중 환불이 됩니다.\n\n계속하시겠습니까?')) return;
   const reason = prompt('환불 실패 사유를 입력해주세요:');
   if (!reason) return;
   btn.disabled = true;
@@ -2642,9 +2697,11 @@ function switchRefundTab(tab, btn) {
   btn.classList.add('active');
   document.getElementById('refund-pending').style.display = tab === 'pending' ? 'block' : 'none';
   document.getElementById('refund-completed').style.display = tab === 'completed' ? 'block' : 'none';
+  document.getElementById('refund-partial').style.display = tab === 'partial' ? 'block' : 'none';
   document.getElementById('refund-failed').style.display = tab === 'failed' ? 'block' : 'none';
   if (tab === 'pending') loadPendingRefunds();
   else if (tab === 'completed') loadCompletedRefunds();
+  else if (tab === 'partial') loadPartialRefunds();
   else if (tab === 'failed') loadFailedRefunds();
 }
 
@@ -2662,6 +2719,46 @@ async function loadFailedRefunds() {
   if (!data || data.length === 0) { container.innerHTML = '<div class="card"><div style="padding:20px;color:var(--text3);text-align:center;">실패한 환불 없음</div></div>'; return; }
   const rows = data.map(r => `<tr><td>${r.users?.phone||'-'}</td><td style="color:var(--red);font-weight:700;">${r.amount.toLocaleString()}원</td><td style="color:var(--orange);font-size:10px;">${r.reason||'-'}</td><td style="font-size:10px;color:var(--text3);">${new Date(r.completed_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})}</td></tr>`).join('');
   container.innerHTML = `<div class="card"><div class="table-wrap"><table><thead><tr><th>전화번호</th><th>금액</th><th>실패사유</th><th>처리일</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
+async function loadPartialRefunds() {
+  const { data } = await db.from('refund_requests').select('*, users(phone)').eq('status', 'partial_failed').order('completed_at', { ascending: false }).limit(100);
+  const container = document.getElementById('refund-partial');
+  if (!data || data.length === 0) { container.innerHTML = '<div class="card"><div style="padding:20px;color:var(--text3);text-align:center;">부분 실패 환불 없음</div></div>'; return; }
+  let cards = '';
+  for (const r of data) {
+    const detail = r.cancel_detail || {};
+    const failedArr = Array.isArray(detail.failed) ? detail.failed : [];
+    const remaining = Number(detail.remaining ?? 0);
+    const failedRows = failedArr.length
+      ? failedArr.map(f => `<div style="font-size:10px;color:var(--text3);font-family:monospace;padding:4px 0;border-bottom:1px solid var(--border);">TID ${String(f.tid||'').slice(0,12)}… / 실패 ${Number(f.cancelAmount||0).toLocaleString()}원 / 사유: ${f.reason||'-'}</div>`).join('')
+      : '<div style="font-size:10px;color:var(--text3);">실패 상세 없음</div>';
+    cards += `<div class="card" id="partial-${r.id}" style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div><span style="color:var(--text);font-weight:700;">${r.users?.phone||'-'}</span> <span style="color:var(--text3);font-size:11px;">요청 ${r.amount.toLocaleString()}원</span></div>
+        <div style="color:var(--red);font-weight:800;">남은 금액: ${remaining.toLocaleString()}원</div>
+      </div>
+      <div style="margin-bottom:10px;">${failedRows}</div>
+      <button class="btn btn-green" style="padding:5px 11px;font-size:11px;" onclick="resolvePartialRefund('${r.id}','${r.user_id}',${remaining},this)">수동 처리 완료</button>
+    </div>`;
+  }
+  container.innerHTML = cards;
+}
+
+async function resolvePartialRefund(id, userId, remaining, btn) {
+  if (!confirm(`나이스페이에서 남은 ${Number(remaining).toLocaleString()}원을 수동 취소하셨나요?`)) return;
+  btn.disabled = true; btn.textContent = '처리중...';
+  await db.from('refund_requests').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', id);
+  await db.from('notifications').insert({
+    user_id: userId,
+    target: 'user',
+    type: 'system',
+    title: '환불 완료',
+    body: '신청하신 환불이 모두 처리되었습니다. 영업일 기준 3-5일 내 입금됩니다.',
+  });
+  document.getElementById('partial-' + id)?.remove();
+  alert('수동 처리 완료로 기록됐습니다.');
+  loadRefunds();
 }
 
 // ===== 대리점 관리 =====
