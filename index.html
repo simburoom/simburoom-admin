@@ -2460,12 +2460,15 @@ document.addEventListener('click', (e) => {
 let kakaoMap = null;
 let mapMarkers = [];
 let mapPolylines = [];
+let mapOverlays = [];
 
 function clearMapOverlays() {
   mapMarkers.forEach(m => m.setMap(null));
   mapPolylines.forEach(p => p.setMap(null));
+  mapOverlays.forEach(o => o.setMap(null));
   mapMarkers = [];
   mapPolylines = [];
+  mapOverlays = [];
 }
 
 async function loadMap() {
@@ -2554,17 +2557,19 @@ async function applyMapFilter() {
   }
 
   const { data: locations } = await query;
-  if (!locations || locations.length === 0) return;
+
+  // 이력 0건이어도 전체 종료하지 않는다 — 경로(폴리라인)만 자연 스킵되고,
+  // 아래 온라인 기사 현재위치 마커(drivers.current_lat/lng)는 항상 그린다.
+  let filteredLocations = locations || [];
 
   // 동 단위 필터 (픽업동/배송동 기준)
-  let filteredLocations = locations;
-  if (dongFilter) {
+  if (dongFilter && filteredLocations.length > 0) {
     const { data: orderIds } = await db.from('orders')
       .select('id')
       .or(`pickup_dong.ilike.%${dongFilter}%,delivery_dong.ilike.%${dongFilter}%`);
     if (orderIds && orderIds.length > 0) {
       const ids = orderIds.map(o => o.id);
-      filteredLocations = locations.filter(l => ids.includes(l.order_id));
+      filteredLocations = filteredLocations.filter(l => ids.includes(l.order_id));
     }
   }
 
@@ -2613,6 +2618,7 @@ async function applyMapFilter() {
     marker.setMap(kakaoMap);
     overlay.setMap(kakaoMap);
     mapMarkers.push(marker);
+    mapOverlays.push(overlay);
 
     // 해당 기사로 지도 이동
     if (driverId && d.id === driverId) {
