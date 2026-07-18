@@ -324,20 +324,101 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
 });
 
-function getAccessToken() { return sessionStorage.getItem('admin_access_token') || ''; }
+// 만료 이 초 이내면 미리 갱신 (요청이 날아가는 도중 만료되는 것 방지)
+const TOKEN_REFRESH_MARGIN_SEC = 60;
+
+// 세션이 바뀔 때마다 sessionStorage를 최신값으로 덮어쓴다.
+// refresh_token까지 동기화하는 이유: Supabase는 갱신 때마다 refresh_token을 회전시킨다.
+// 옛 refresh_token을 남겨두면 새로고침 경로(setDbAuth)가 폐기된 토큰으로 setSession을 시도해 실패한다.
+function syncStoredSession(session) {
+  if (!session) return;
+  if (session.access_token) sessionStorage.setItem('admin_access_token', session.access_token);
+  if (session.refresh_token) sessionStorage.setItem('admin_refresh_token', session.refresh_token);
+}
+
+function clearStoredSession() {
+  sessionStorage.removeItem('admin_session');
+  sessionStorage.removeItem('admin_access_token');
+  sessionStorage.removeItem('admin_refresh_token');
+}
+
+// 로그인 화면 복귀. DOM 준비 전 이벤트가 와도 죽지 않도록 방어.
+function returnToLogin() {
+  const auth = document.getElementById('auth');
+  if (!auth) return;
+  const app = document.getElementById('app');
+  if (app) app.style.display = 'none';
+  auth.style.display = 'flex';
+  const u = document.getElementById('login-username');
+  const p = document.getElementById('login-password');
+  if (u) u.value = '';
+  if (p) p.value = '';
+  showLogin();
+}
+
+db.auth.onAuthStateChange((event, session) => {
+  if ((event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') && session) {
+    syncStoredSession(session);
+  } else if (event === 'SIGNED_OUT') {
+    clearStoredSession();
+    returnToLogin();
+  }
+});
+
+// 이 클라이언트는 autoRefreshToken:false라 백그라운드 자동 갱신이 없다.
+// 따라서 호출 시점에 만료를 직접 확인하고 필요하면 명시적으로 갱신한다.
+// (sessionStorage 단독 반환은 로그인 후 1시간이 지나면 만료 JWT를 그대로 실어보냈다)
+async function getAccessToken() {
+  try {
+    const { data: { session } } = await db.auth.getSession();
+    if (session?.access_token) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const expiresAt = session.expires_at ?? 0;
+      const stale = expiresAt > 0 && expiresAt <= nowSec + TOKEN_REFRESH_MARGIN_SEC;
+      if (!stale) {
+        syncStoredSession(session);
+        return session.access_token;
+      }
+      const { data: refreshed, error } = await db.auth.refreshSession();
+      if (!error && refreshed?.session?.access_token) {
+        syncStoredSession(refreshed.session);
+        return refreshed.session.access_token;
+      }
+      // 갱신 실패(리프레시 토큰 만료/폐기 등) — 남은 토큰으로라도 시도한다.
+      // 서버가 401을 주면 각 호출부의 기존 오류 처리로 드러난다.
+      console.warn('토큰 갱신 실패:', error);
+      syncStoredSession(session);
+      return session.access_token;
+    }
+  } catch (e) {
+    console.warn('세션 조회 실패, sessionStorage로 폴백:', e);
+  }
+  return sessionStorage.getItem('admin_access_token') || '';
+}
+
+// 성공 시 true. setSession이 만료 토큰을 refresh_token으로 갱신해주며,
+// 그 결과를 반환값으로 직접 동기화해 이벤트 발생 여부에 의존하지 않는다.
 async function setDbAuth(token) {
   if (token) {
     const refresh = sessionStorage.getItem('admin_refresh_token') || '';
-    await db.auth.setSession({ access_token: token, refresh_token: refresh });
-  } else {
-    await db.auth.signOut();
+    const { data, error } = await db.auth.setSession({ access_token: token, refresh_token: refresh });
+    if (error || !data?.session) {
+      console.warn('세션 복원 실패:', error);
+      return false;
+    }
+    syncStoredSession(data.session);
+    return true;
   }
+  await db.auth.signOut();
+  return true;
 }
-function smsHeaders() { return { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${getAccessToken()}` }; }
+
+// getAccessToken이 비동기가 되면서 이 함수도 비동기. 호출부는 전부 await smsHeaders().
+async function smsHeaders() { return { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${await getAccessToken()}` }; }
 async function callAdminAction(action, payload) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-action`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${getAccessToken()}` },
+    headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${await getAccessToken()}` },
     body: JSON.stringify({ action, payload })
   });
   let data = {};
@@ -402,15 +483,10 @@ function applySession(session) {
 }
 async function logout() {
   if (!confirm('로그아웃 하시겠습니까?')) return;
-  sessionStorage.removeItem('admin_session');
-  sessionStorage.removeItem('admin_access_token');
-  sessionStorage.removeItem('admin_refresh_token');
+  clearStoredSession();
+  // signOut이 SIGNED_OUT을 발생시켜 핸들러가 clearStoredSession + returnToLogin을 다시 수행한다(멱등).
   await setDbAuth(null);
-  document.getElementById('app').style.display = 'none';
-  document.getElementById('auth').style.display = 'flex';
-  document.getElementById('login-username').value = '';
-  document.getElementById('login-password').value = '';
-  showLogin();
+  returnToLogin();
 }
 
 /* ===== Navigation ===== */
@@ -671,7 +747,7 @@ async function blockDriverM(id, name, btn) {
 async function approveDriver(id, phone, btn) {
   btn.disabled = true; btn.textContent = '처리 중...';
   await db.from('drivers').update({ is_approved: true }).eq('id', id);
-  await fetch(`${SUPABASE_URL}/functions/v1/send-approval-sms`, { method: 'POST', headers: smsHeaders(), body: JSON.stringify({ phone }) });
+  await fetch(`${SUPABASE_URL}/functions/v1/send-approval-sms`, { method: 'POST', headers: await smsHeaders(), body: JSON.stringify({ phone }) });
   document.getElementById('dc-' + id)?.remove();
   alert('승인 완료!');
 }
@@ -681,7 +757,7 @@ async function rejectDriver(id, phone, btn) {
   btn.disabled = true; btn.textContent = '처리 중...';
   try {
     await callAdminAction('rejectDriver', { driverId: id, reason });
-    await fetch(`${SUPABASE_URL}/functions/v1/send-rejection-sms`, { method: 'POST', headers: smsHeaders(), body: JSON.stringify({ phone, reason }) });
+    await fetch(`${SUPABASE_URL}/functions/v1/send-rejection-sms`, { method: 'POST', headers: await smsHeaders(), body: JSON.stringify({ phone, reason }) });
     document.getElementById('dc-' + id)?.remove();
     alert('반려 처리 완료 (재심사 가능)');
   } catch(e) { btn.disabled = false; btn.textContent = '❌ 거절'; alert('처리 실패: ' + e.message); }
@@ -876,7 +952,7 @@ async function createAgent() {
   const { error } = await db.from('agents').insert({ code, name, phone, region, bank_name, account_number, account_holder, temp_password });
   if (error) { alert('등록 실패: ' + error.message); return; }
   if (phone) {
-    await fetch(`${SUPABASE_URL}/functions/v1/send-dispatch-sms`, { method: 'POST', headers: smsHeaders(), body: JSON.stringify({ phone, templateId: "KA01TP260622144244155HgbYcJbQEtl", variables: { "#{대리점코드}": code, "#{임시비밀번호}": temp_password } }) });
+    await fetch(`${SUPABASE_URL}/functions/v1/send-dispatch-sms`, { method: 'POST', headers: await smsHeaders(), body: JSON.stringify({ phone, templateId: "KA01TP260622144244155HgbYcJbQEtl", variables: { "#{대리점코드}": code, "#{임시비밀번호}": temp_password } }) });
   }
   alert(`대리점 등록 완료!\n임시 비밀번호: ${temp_password}`);
   ['agent-code', 'agent-name', 'agent-phone', 'agent-region', 'agent-bank', 'agent-account', 'agent-holder'].forEach(id => document.getElementById(id).value = '');
@@ -992,7 +1068,7 @@ async function sendPush() {
   }
   if (tokens.length === 0) { alert('발송 대상이 없습니다. (푸시 토큰 없음)'); return; }
   if (!confirm(`${tokens.length}명에게 푸시를 발송할까요?`)) return;
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/send-push`, { method: 'POST', headers: smsHeaders(), body: JSON.stringify({ tokens, title, body }) });
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/send-push`, { method: 'POST', headers: await smsHeaders(), body: JSON.stringify({ tokens, title, body }) });
   if (res.ok) {
     alert(`${tokens.length}명에게 발송 완료!`);
     document.getElementById('push-title').value = '';
@@ -1043,13 +1119,16 @@ async function deleteNotice(id) {
   const token = sessionStorage.getItem('admin_access_token');
   if (saved && token) {
     try {
-      await setDbAuth(token);
-      applySession(JSON.parse(saved));
-      return;
+      // setDbAuth가 만료 토큰을 refresh_token으로 갱신하고 sessionStorage까지 동기화한다.
+      // 실패(리프레시 토큰 만료/폐기)면 대시보드를 띄우지 않고 로그인으로 되돌린다.
+      // 예전에는 실패해도 applySession이 그대로 실행돼 만료 토큰으로 화면만 열렸다.
+      if (await setDbAuth(token)) {
+        applySession(JSON.parse(saved));
+        return;
+      }
+      clearStoredSession();
     } catch (e) {
-      sessionStorage.removeItem('admin_session');
-      sessionStorage.removeItem('admin_access_token');
-      sessionStorage.removeItem('admin_refresh_token');
+      clearStoredSession();
     }
   }
   showLogin();
