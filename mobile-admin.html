@@ -815,83 +815,42 @@ async function loadPickupFails() {
     </div>`).join('');
 }
 async function resolvePickupFail(orderId, action, btn) {
+  // 조회는 확인창에 보여줄 금액을 만들기 위한 읽기 전용이다.
+  // 실제 지급·환급 금액은 서버(admin-action)가 CAS 반환행에서 다시 읽는다 — 여기 값은 신뢰 대상이 아니다.
   const { data: order } = await db.from('orders').select('driver_id, buyer_id, cancel_fee, cancel_fee_charge, cancel_fee_point, delivery_fee, order_type').eq('id', orderId).maybeSingle();
   const comp = order?.cancel_fee || 0;
   if (action === 'compensate') {
     // 기사 지급액: buy/sell 모두 유저 선차감액(cancel_fee)으로 보상.
     // report-pickup-fail(①)이 신고 시점에 buy/sell 구분 없이 0.2F를 유저에게서 선차감해 cancel_fee에 기록하므로,
     // 그 금액을 그대로 기사에게 전달한다(회사 별도 부담 아님).
-    const driverPay = comp;
     const msg = `유저 선차감액(헛걸음 차감) ${comp.toLocaleString()}원을 기사 보상으로 지급합니다. (회사 별도 부담 아님) 진행할까요?`;
     if (!confirm(msg)) return;
-    btn.disabled = true;
-    // a) 기사 지급
-    if (order?.driver_id) {
-      const { data: driver } = await db.from('drivers').select('withdrawable_amount, today_earnings, total_earnings, user_id').eq('id', order.driver_id).maybeSingle();
-      if (driver) {
-        const { error: payErr } = await db.from('drivers').update({
-          withdrawable_amount: (driver.withdrawable_amount || 0) + driverPay,
-          today_earnings: (driver.today_earnings || 0) + driverPay,
-          total_earnings: (driver.total_earnings || 0) + driverPay,
-        }).eq('id', order.driver_id);
-        if (payErr) console.log('기사 지급 실패:', payErr.message || JSON.stringify(payErr));
-        await db.from('driver_compensations').insert({
-          driver_id: order.driver_id, amount: driverPay, type: 'pickup_fail_compensation', description: '헛걸음(유저귀책) 보상', order_id: orderId,
-        });
-        // 기사 개인 알림
-        if (driver.user_id) {
-          await db.from('notifications').insert({
-            user_id: driver.user_id, target: 'driver', type: 'system',
-            title: '헛걸음 보상이 지급됐어요',
-            body: `픽업 불가 신고가 확인되어 헛걸음 보상 ${driverPay.toLocaleString()}원이 지급됐어요.`,
-          });
-        }
-      }
-    }
-    // b) 주문 취소 (cancel_fee류는 이미 저장돼 있어 건드리지 않음)
-    const { error: cancelErr } = await db.from('orders').update({ status: 'cancelled', pickup_fail_resolution: 'compensated' }).eq('id', orderId);
-    if (cancelErr) console.log('주문 취소 실패:', cancelErr.message || JSON.stringify(cancelErr));
   } else {
     // 환급액: 실제 선차감된 charge/point 만큼만 정확히 복원
     const rc = order?.cancel_fee_charge || 0;
     const rp = order?.cancel_fee_point || 0;
-    const refund = rc + rp;
-    if (!confirm(`기사 귀책으로 처리합니다. 유저에게 선차감 ${refund.toLocaleString()}원을 환급하고, 기사 보상은 없습니다. 진행할까요?`)) return;
-    btn.disabled = true;
-    // a) 유저 복원 (charge/point 각각 차감된 만큼 되돌림)
-    if (order?.buyer_id) {
-      const { data: user } = await db.from('users').select('charge_balance, point_balance').eq('id', order.buyer_id).maybeSingle();
-      if (user) {
-        await db.from('users').update({
-          charge_balance: (user.charge_balance || 0) + rc,
-          point_balance: (user.point_balance || 0) + rp,
-        }).eq('id', order.buyer_id);
-      }
-      // 유저 알림 (실제 차감이 있었던 경우만)
-      if (refund > 0) {
-        await db.from('notifications').insert({
-          user_id: order.buyer_id, target: 'user', type: 'system',
-          title: '차감이 취소됐어요',
-          body: `픽업 불가 신고가 반려되어 앞서 차감된 ${refund.toLocaleString()}원이 취소됐어요.`,
-        });
-      }
-    }
-    // b) 주문 취소 + 선차감 컬럼 초기화
-    await db.from('orders').update({ status: 'cancelled', cancel_fee: 0, cancel_fee_charge: 0, cancel_fee_point: 0, pickup_fail_resolution: 'rejected' }).eq('id', orderId);
-    // c) 기사 개인 알림
-    if (order?.driver_id) {
-      const { data: driver } = await db.from('drivers').select('user_id').eq('id', order.driver_id).maybeSingle();
-      if (driver?.user_id) {
-        await db.from('notifications').insert({
-          user_id: driver.user_id, target: 'driver', type: 'system',
-          title: '픽업 불가 신고가 반려됐어요',
-          body: `픽업 불가 신고가 반려되어 보상이 지급되지 않았어요.`,
-        });
-      }
-    }
+    if (!confirm(`기사 귀책으로 처리합니다. 유저에게 선차감 ${(rc + rp).toLocaleString()}원을 환급하고, 기사 보상은 없습니다. 진행할까요?`)) return;
   }
-  document.getElementById('pf-' + orderId)?.remove();
-  alert('처리 완료!');
+  btn.disabled = true;
+  try {
+    // 기사 지급 / 유저 환급 / 주문 취소 / 알림을 admin-action(service_role)이 CAS로 원자 처리한다.
+    // status='pickup_failed' + pickup_fail_resolution IS NULL 일 때만 선점되므로 중복 클릭 시 1회만 통과.
+    const res = await callAdminAction('resolvePickupFail', {
+      orderId,
+      resolution: action === 'compensate' ? 'compensate' : 'reject',
+    });
+    if (res.alreadyResolved) {
+      alert('이미 처리된 신고예요. (중복 처리되지 않았습니다)');
+    } else if (res.resolution === 'compensated') {
+      alert(`처리 완료! 기사에게 ${(res.driverPay || 0).toLocaleString()}원이 지급됐어요.`);
+    } else {
+      alert(`처리 완료! 유저에게 ${(res.refund || 0).toLocaleString()}원이 환급됐어요.`);
+    }
+    document.getElementById('pf-' + orderId)?.remove();
+  } catch (e) {
+    alert('처리 실패: ' + e.message);
+    btn.disabled = false;
+  }
 }
 
 /* ===== Service areas ===== */
