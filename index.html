@@ -1069,6 +1069,19 @@ async function callAdminAction(action, payload) {
   return data;
 }
 
+// 기사 안내 SMS. 승인/반려 자체는 admin-action에서 이미 확정된 뒤라 SMS 실패로 되돌리지 않는다.
+// 다만 res.ok를 확인하지 않고 성공 alert를 띄우던 패턴을 없애기 위해 성공 여부를 반환한다.
+async function sendDriverSms(fn, body) {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/${fn}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${await getAccessToken()}` },
+      body: JSON.stringify(body)
+    });
+    return res.ok;
+  } catch (_) { return false; }
+}
+
 var currentSection = 'dashboard';
 
 function showSection(id, el) {
@@ -1871,11 +1884,17 @@ async function openDriverDetail(id) {
   `;
 }
 
+// 차단: is_approved/is_online 직접 UPDATE → admin-action(service_role) 이관.
+// 승인 취소 + 강제 오프라인 + 사유 기록을 서버가 CAS로 한 번만 처리한다.
 async function blockDriver(id, name) {
-  if (!confirm(name + '님을 차단(비승인)하시겠습니까?')) return;
-  await db.from('drivers').update({ is_approved: false, is_online: false }).eq('id', id);
-  alert('차단 완료');
-  loadAllDrivers();
+  if (!confirm((name||'이 기사') + '님을 차단(미승인 처리)하시겠습니까?')) return;
+  const reason = prompt('차단 사유를 입력해주세요:');
+  if (!reason) return;
+  try {
+    const result = await callAdminAction('blockDriver', { driverId: id, reason });
+    alert(result.alreadyBlocked ? '이미 차단된 기사입니다' : '차단 완료');
+    loadAllDrivers();
+  } catch(e) { alert('차단 실패: ' + e.message); }
 }
 
 async function loadPendingDrivers() {
@@ -1944,25 +1963,35 @@ async function loadInsuranceReviewDrivers() {
 }
 
 // 보험 재승인: insurance_status만 valid로 갱신. is_approved는 절대 건드리지 않는다.
+// 직접 UPDATE → admin-action 이관. CAS(pending_review일 때만)로 중복 승인 차단.
 async function approveInsurance(id, name, btn) {
   if (!confirm((name||'이 기사') + '님의 보험을 재승인할까요? (다시 배차 대상이 됩니다)')) return;
   if (btn) { btn.disabled = true; btn.textContent = '처리 중...'; }
-  const { error } = await db.from('drivers').update({ insurance_status: 'valid' }).eq('id', id);
-  if (error) { alert('처리 실패: ' + error.message); if (btn) { btn.disabled = false; btn.textContent = '✅ 보험 재승인'; } return; }
-  document.getElementById('ins-card-' + id)?.remove();
-  alert('보험 재승인 완료');
-  loadInsuranceReviewDrivers();
+  try {
+    const result = await callAdminAction('approveInsurance', { driverId: id });
+    document.getElementById('ins-card-' + id)?.remove();
+    alert(result.alreadyProcessed ? '이미 처리된 건입니다' : '보험 재승인 완료');
+    loadInsuranceReviewDrivers();
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '✅ 보험 재승인'; }
+    alert('처리 실패: ' + e.message);
+  }
 }
 
 // 보험 반려: locked로 되돌림 → 기사가 앱에서 다시 재제출 가능.
+// 직접 UPDATE → admin-action 이관. CAS(pending_review일 때만)로 중복 반려 차단.
 async function rejectInsurance(id, name, btn) {
   if (!confirm((name||'이 기사') + '님의 보험 재제출을 반려할까요? (locked로 되돌아가며 기사가 다시 제출할 수 있습니다)')) return;
   if (btn) { btn.disabled = true; btn.textContent = '처리 중...'; }
-  const { error } = await db.from('drivers').update({ insurance_status: 'locked' }).eq('id', id);
-  if (error) { alert('처리 실패: ' + error.message); if (btn) { btn.disabled = false; btn.textContent = '↩️ 보험 반려'; } return; }
-  document.getElementById('ins-card-' + id)?.remove();
-  alert('보험 반려 완료');
-  loadInsuranceReviewDrivers();
+  try {
+    const result = await callAdminAction('rejectInsurance', { driverId: id });
+    document.getElementById('ins-card-' + id)?.remove();
+    alert(result.alreadyProcessed ? '이미 처리된 건입니다' : '보험 반려 완료');
+    loadInsuranceReviewDrivers();
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '↩️ 보험 반려'; }
+    alert('처리 실패: ' + e.message);
+  }
 }
 
 function switchDriverTab(tab, el) {
@@ -2075,12 +2104,25 @@ async function rejectDeleteDriver(driverId, name) {
   } catch(e) { alert('반려 처리 실패: ' + e.message); }
 }
 
+// 승인: is_approved 직접 UPDATE → admin-action 이관. CAS(is_approved가 true가 아닐 때만)로 중복 승인 차단.
+// 이미 승인된 건이면 승인 SMS를 재발송하지 않는다.
 async function approveDriver(id, phone, btn) {
   btn.disabled = true; btn.textContent = '처리 중...';
-  await db.from('drivers').update({ is_approved: true }).eq('id', id);
-  await fetch(`${SUPABASE_URL}/functions/v1/send-approval-sms`, { method:'POST', headers:{'Content-Type':'application/json','apikey':SUPABASE_ANON_KEY,'Authorization':`Bearer ${await getAccessToken()}`}, body: JSON.stringify({ phone }) });
-  document.getElementById('driver-card-' + id)?.remove();
-  alert('승인 완료!');
+  try {
+    const result = await callAdminAction('approveDriver', { driverId: id });
+    if (result.alreadyApproved) {
+      document.getElementById('driver-card-' + id)?.remove();
+      alert('이미 승인된 기사입니다');
+      return;
+    }
+    // 승인은 이미 확정됐다. SMS 실패는 승인을 되돌리지 않고 경고만 덧붙인다.
+    const smsOk = await sendDriverSms('send-approval-sms', { phone });
+    document.getElementById('driver-card-' + id)?.remove();
+    alert(smsOk ? '승인 완료!' : '승인 완료! (승인 안내 SMS 발송 실패 — 기사에게 직접 안내해주세요)');
+  } catch(e) {
+    btn.disabled = false; btn.textContent = '✅ 승인';
+    alert('승인 실패: ' + e.message);
+  }
 }
 
 async function rejectDriver(id, phone, btn) {
@@ -2089,14 +2131,10 @@ async function rejectDriver(id, phone, btn) {
   btn.disabled = true; btn.textContent = '처리 중...';
   try {
     await callAdminAction('rejectDriver', { driverId: id, reason });
-    await fetch(`${SUPABASE_URL}/functions/v1/send-rejection-sms`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${await getAccessToken()}` },
-      body: JSON.stringify({ phone, reason })
-    });
+    const smsOk = await sendDriverSms('send-rejection-sms', { phone, reason });
     document.getElementById('driver-card-' + id)?.remove();
-    alert('반려 처리 완료 (재심사 가능)');
-  } catch(e) { btn.disabled = false; btn.textContent = '반려'; alert('처리 실패: ' + e.message); }
+    alert(smsOk ? '반려 처리 완료 (재심사 가능)' : '반려 처리 완료 (재심사 가능) — 반려 안내 SMS 발송 실패');
+  } catch(e) { btn.disabled = false; btn.textContent = '❌ 거절'; alert('처리 실패: ' + e.message); }
 }
 
 // ===== 정산 =====
