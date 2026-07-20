@@ -180,6 +180,8 @@
 
       <!-- ORDERS (pickup fail) -->
       <div id="view-orders" class="view">
+        <div class="section-title">배송중 주문</div>
+        <div id="delivering-list"><div class="empty">로딩 중...</div></div>
         <div class="section-title">픽업 불가 신고</div>
         <div id="pickupfail-list"><div class="empty">로딩 중...</div></div>
       </div>
@@ -516,7 +518,7 @@ function showTab(tab) {
   document.getElementById('topbar-title').textContent = TAB_TITLES[tab];
   if (tab === 'home') loadDashboard();
   else if (tab === 'drivers') switchDriverTabM('pending');
-  else if (tab === 'orders') loadPickupFails();
+  else if (tab === 'orders') { loadDeliveringOrders(); loadPickupFails(); }
   else if (tab === 'area') loadServiceAreas();
 }
 function openSub(id) {
@@ -836,6 +838,67 @@ function renderPfCompare(o) {
     + `<div style="border-top:1px solid var(--border);margin-top:8px;">${renderPfPhotos(o.pickup_fail_photos)}</div>`
     + `</div>`;
 }
+// ===== 배송중 주문 (강제 종결 대상) =====
+// 기사 증발로 delivering에 좌초된 주문을 회수하기 위한 목록. 오래 걸린 건이 먼저 보이도록
+// picked_up_at 오름차순으로 정렬한다(가장 오래 묶인 주문이 최상단).
+async function loadDeliveringOrders() {
+  const { data } = await db.from('orders').select('id, delivery_fee, picked_up_at, driver_id').eq('status', 'delivering').order('picked_up_at', { ascending: true });
+  const c = document.getElementById('delivering-list');
+  if (!data || data.length === 0) { c.innerHTML = '<div class="empty">배송중 주문 없음</div>'; return; }
+  // 기사명은 별도 조회로 채운다(orders→drivers 임베드에 의존하지 않음).
+  const driverIds = [...new Set(data.map(o => o.driver_id).filter(Boolean))];
+  const nameById = {};
+  if (driverIds.length > 0) {
+    const { data: drv } = await db.from('drivers').select('id, name').in('id', driverIds);
+    (drv || []).forEach(d => { nameById[d.id] = d.name; });
+  }
+  c.innerHTML = data.map(o => `
+    <div class="list-item" id="dl-${o.id}">
+      <div class="li-title" style="font-family:monospace;">${o.id.substring(0, 8)}</div>
+      <div class="li-sub">${nameById[o.driver_id] || '기사 미상'} · ${(o.delivery_fee || 0).toLocaleString()}원</div>
+      <div class="li-sub">픽업완료 ${o.picked_up_at ? new Date(o.picked_up_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) : '-'}</div>
+      <div class="li-actions">
+        <button class="btn btn-red" onclick="forceCloseDelivery('${o.id}',this)">강제 종결</button>
+      </div>
+    </div>`).join('');
+}
+
+// ===== 배송 강제 종결 =====
+// delivering에 좌초된 주문(기사 증발·연락두절)의 유일한 회수 경로.
+// cancel-order는 delivering을 2중으로 거부하고 유저앱에도 취소 버튼이 없어, 이 버튼이 없으면
+// 유저 보증금이 무기한 동결되고 그 기사는 활성주문 가드에 걸려 영구히 콜을 못 받는다.
+// 상태 전이·보증금 복원(restore_deposit)·알림 2건은 전부 admin-action의 forceCloseDelivery가 처리한다.
+// status='delivering'일 때만 CAS로 선점되므로 중복 클릭해도 1회만 통과한다.
+// ★CAS 0행(=delivering 아님)은 HTTP 200 + { success:false } 로 오므로 catch가 아니라 본문에서 판정한다.
+async function forceCloseDelivery(orderId, btn) {
+  const shortId = String(orderId).substring(0, 8);
+  const msg = `주문 ${shortId} 의 배송을 강제 종결합니다.\n\n`
+    + `· 유저에게 배송비가 전액 환불됩니다.\n`
+    + `· 기사에게는 정산이 지급되지 않습니다.\n\n`
+    + `되돌릴 수 없습니다.`;
+  if (!confirm(msg)) return;
+  btn.disabled = true;
+  try {
+    const res = await callAdminAction('forceCloseDelivery', { orderId });
+    if (res.success === false) {
+      alert(`강제 종결 실패 (${res.reason || '알 수 없음'})\ndelivering 상태가 아닙니다. 현재: ${res.status || '알 수 없음'}`);
+      btn.disabled = false;
+      return;
+    }
+    if (res.depositError) {
+      alert(`강제 종결 완료 — 단, 보증금 복원 실패. 수동 확인이 필요합니다.\n주문 ${shortId} / 사유: ${res.depositError}`);
+    } else {
+      alert(`강제 종결 완료! 주문 ${shortId}\n유저에게 배송비가 전액 환불됐어요.`);
+    }
+    // 목록 갱신 — 각 파일에 존재하는 로더만 호출된다(admin.html: loadOrders / mobile-admin.html: loadDeliveringOrders).
+    if (typeof loadOrders === 'function') loadOrders();
+    if (typeof loadDeliveringOrders === 'function') loadDeliveringOrders();
+  } catch (e) {
+    alert('강제 종결 실패: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
 async function loadPickupFails() {
   const { data } = await db.from('orders').select('id, pickup_dong, delivery_dong, delivery_fee, seller_phone, fail_reason, created_at, pickup_fail_photos, seller_item_photo_url').eq('status', 'pickup_failed').order('created_at', { ascending: false });
   const c = document.getElementById('pickupfail-list');
