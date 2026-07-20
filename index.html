@@ -1540,7 +1540,7 @@ async function loadOrders() {
   tbody.innerHTML = data.map(o => `
     <tr>
       <td style="color:var(--primary);font-weight:600;font-size:10px;font-family:monospace;">${o.id.substring(0,8)}...</td>
-      <td>${statusBadge[o.status] || o.status}</td>
+      <td>${statusBadge[o.status] || o.status}${o.status === 'delivering' ? ` <button class="btn btn-danger" style="margin-left:6px;padding:2px 8px;font-size:10px;" onclick="forceCloseDelivery('${o.id}',this)">강제 종결</button>` : ''}</td>
       <td>${o.pickup_dong || '-'}</td>
       <td>${o.delivery_dong || '-'}</td>
       <td style="color:var(--text3);">${o.distance_km ? o.distance_km.toFixed(1)+'km' : '-'}</td>
@@ -1548,6 +1548,42 @@ async function loadOrders() {
       <td style="font-size:10px;color:var(--text3);">${o.driver_id ? o.driver_id.substring(0,8)+'...' : '-'}</td>
       <td style="font-size:10px;color:var(--text3);">${new Date(o.created_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
     </tr>`).join('');
+}
+
+// ===== 배송 강제 종결 =====
+// delivering에 좌초된 주문(기사 증발·연락두절)의 유일한 회수 경로.
+// cancel-order는 delivering을 2중으로 거부하고 유저앱에도 취소 버튼이 없어, 이 버튼이 없으면
+// 유저 보증금이 무기한 동결되고 그 기사는 활성주문 가드에 걸려 영구히 콜을 못 받는다.
+// 상태 전이·보증금 복원(restore_deposit)·알림 2건은 전부 admin-action의 forceCloseDelivery가 처리한다.
+// status='delivering'일 때만 CAS로 선점되므로 중복 클릭해도 1회만 통과한다.
+// ★CAS 0행(=delivering 아님)은 HTTP 200 + { success:false } 로 오므로 catch가 아니라 본문에서 판정한다.
+async function forceCloseDelivery(orderId, btn) {
+  const shortId = String(orderId).substring(0, 8);
+  const msg = `주문 ${shortId} 의 배송을 강제 종결합니다.\n\n`
+    + `· 유저에게 배송비가 전액 환불됩니다.\n`
+    + `· 기사에게는 정산이 지급되지 않습니다.\n\n`
+    + `되돌릴 수 없습니다.`;
+  if (!confirm(msg)) return;
+  btn.disabled = true;
+  try {
+    const res = await callAdminAction('forceCloseDelivery', { orderId });
+    if (res.success === false) {
+      alert(`강제 종결 실패 (${res.reason || '알 수 없음'})\ndelivering 상태가 아닙니다. 현재: ${res.status || '알 수 없음'}`);
+      btn.disabled = false;
+      return;
+    }
+    if (res.depositError) {
+      alert(`강제 종결 완료 — 단, 보증금 복원 실패. 수동 확인이 필요합니다.\n주문 ${shortId} / 사유: ${res.depositError}`);
+    } else {
+      alert(`강제 종결 완료! 주문 ${shortId}\n유저에게 배송비가 전액 환불됐어요.`);
+    }
+    // 목록 갱신 — 각 파일에 존재하는 로더만 호출된다(admin.html: loadOrders / mobile-admin.html: loadDeliveringOrders).
+    if (typeof loadOrders === 'function') loadOrders();
+    if (typeof loadDeliveringOrders === 'function') loadDeliveringOrders();
+  } catch (e) {
+    alert('강제 종결 실패: ' + e.message);
+    btn.disabled = false;
+  }
 }
 
 // ===== 픽업 불가 신고 =====
