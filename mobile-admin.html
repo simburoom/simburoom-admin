@@ -628,6 +628,69 @@ async function loadDashboard() {
   else { wEl.style.color = ''; }
 }
 
+/* ===== driver-docs (private 버킷) signed URL =====
+   driver-docs는 private로 전환되므로 DB에 저장된 /object/public/ URL은 403이 된다.
+   저장값에서 객체 경로만 뽑아 매번 60초 signed URL을 발급해 소비한다
+   (기존 데이터 마이그레이션 없이 그대로 쓰기 위함).
+   ★ order-photos는 public 유지 — 알림톡이 소비하므로 이 경로를 타지 않는다.
+   ★ 어드민 클라이언트는 anon key + setSession(authenticated). service_role 금지.
+   ★ admin.html / mobile-admin.html 공통 블록 — 한쪽만 고치지 말 것. */
+const DRIVER_DOCS_BUCKET = 'driver-docs';
+const DRIVER_DOC_TTL = 60;
+
+// 저장값 → 버킷 내 객체 경로. 과거 public URL / sign URL / 순수 경로를 모두 받는다.
+function driverDocPath(stored) {
+  if (typeof stored !== 'string') return null;
+  const s = stored.trim();
+  if (!s) return null;
+  const m = s.match(/\/storage\/v1\/object\/(?:public|sign)\/driver-docs\/([^?#]+)/);
+  let path = m ? m[1] : (/^https?:\/\//i.test(s) ? null : s.replace(/^\/+/, '').replace(/^driver-docs\//, ''));
+  if (!path) return null;
+  try { path = decodeURIComponent(path); } catch (e) {}
+  return path || null;
+}
+
+async function driverDocSignedUrl(stored) {
+  const path = driverDocPath(stored);
+  if (!path) return null;
+  try {
+    const { data, error } = await db.storage.from(DRIVER_DOCS_BUCKET).createSignedUrl(path, DRIVER_DOC_TTL);
+    if (error || !data || !data.signedUrl) return null;
+    return data.signedUrl;
+  } catch (e) { return null; }
+}
+
+// 렌더 시점의 저장값을 보관해 클릭 시점에 재발급한다(60초 TTL 만료 대비).
+const driverDocStore = new Map();
+function rememberDriverDocs(d) {
+  if (!d || !d.id) return;
+  if (d.license_url) driverDocStore.set(d.id + ':license', d.license_url);
+  if (d.insurance_url) driverDocStore.set(d.id + ':insurance', d.insurance_url);
+}
+
+function driverDocLabel(type) { return type === 'license' ? '면허증' : '보험증서'; }
+
+// 발급 실패가 조용히 사라지지 않게 명시적으로 알린다("서류 미제출" 오판 방지).
+function driverDocFailBox(label) {
+  return '<div style="background:var(--bg2);border:1px dashed var(--red);border-radius:8px;padding:16px;text-align:center;color:var(--red);font-size:11px;line-height:1.5;">⚠️ ' + label + ' 로드 실패<br><span style="color:var(--text3);">잠시 후 다시 시도해주세요</span></div>';
+}
+function driverDocImgFailed(el, label) {
+  if (el && el.parentNode) el.outerHTML = driverDocFailBox(label);
+}
+
+// 클릭 시점 재발급. 팝업 차단을 피하려 창을 먼저 열고 URL을 나중에 넣는다.
+async function openDriverDoc(id, type) {
+  const label = driverDocLabel(type);
+  const w = window.open('', '_blank');
+  const url = await driverDocSignedUrl(driverDocStore.get(id + ':' + type));
+  if (!url) {
+    if (w) w.close();
+    alert(label + ' 로드 실패 — 잠시 후 다시 시도해주세요.');
+    return;
+  }
+  if (w) w.location.href = url; else window.open(url, '_blank');
+}
+
 /* ===== Drivers ===== */
 async function loadPendingDrivers() {
   const { data, error } = await db.from('drivers').select('id, phone, name, vehicle_type, vehicle_number, license_url, insurance_url, insurance_expires_at, created_at').eq('is_approved', false).not('name', 'is', null).is('rejected_at', null).order('created_at', { ascending: true });
@@ -635,14 +698,15 @@ async function loadPendingDrivers() {
   if (error) { console.error('loadPendingDrivers error:', error); document.getElementById('pending-count').textContent = ''; c.innerHTML = '<div class="empty">불러오기 실패: ' + (error.message || error) + '</div>'; return; }
   document.getElementById('pending-count').textContent = data ? '(' + data.length + ')' : '';
   if (!data || data.length === 0) { c.innerHTML = '<div class="empty">심사 대기 중인 기사가 없습니다</div>'; return; }
+  data.forEach(rememberDriverDocs);
   c.innerHTML = data.map(d => `
     <div class="list-item" id="dc-${d.id}">
       <div class="li-title">🛵 ${d.name || '(이름 없음)'} · ${d.phone}</div>
       <div class="li-sub">${vehicleLabel(d.vehicle_type)} · ${d.vehicle_number || '-'} · 보험만료 ${d.insurance_expires_at || '-'}</div>
       <div class="li-sub">신청: ${new Date(d.created_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</div>
       <div class="li-actions">
-        ${d.license_url ? `<button class="btn btn-ghost" onclick="window.open('${esc(d.license_url)}','_blank')">🪪 면허</button>` : ''}
-        ${d.insurance_url ? `<button class="btn btn-ghost" onclick="window.open('${esc(d.insurance_url)}','_blank')">📋 보험</button>` : ''}
+        ${d.license_url ? `<button class="btn btn-ghost" onclick="openDriverDoc('${d.id}','license')">🪪 면허</button>` : ''}
+        ${d.insurance_url ? `<button class="btn btn-ghost" onclick="openDriverDoc('${d.id}','insurance')">📋 보험</button>` : ''}
         <button class="btn btn-green" onclick="approveDriver('${d.id}','${esc(d.phone)}',this)">✅ 승인</button>
         <button class="btn btn-red" onclick="rejectDriver('${d.id}','${esc(d.phone)}',this)">❌ 거절</button>
       </div>
@@ -682,13 +746,14 @@ async function loadInsuranceDriversM() {
   if (error) { if (countEl) countEl.textContent = ''; c.innerHTML = '<div class="empty">불러오기 실패: ' + (error.message || error) + '</div>'; return; }
   if (countEl) countEl.textContent = data?.length ? '(' + data.length + ')' : '';
   if (!data || data.length === 0) { c.innerHTML = '<div class="empty">보험 재심사 대기 중인 기사가 없습니다</div>'; return; }
+  data.forEach(rememberDriverDocs);
   c.innerHTML = data.map(d => `
     <div class="list-item" id="dc-${d.id}">
       <div class="li-title">📋 ${d.name || '(이름 없음)'} · ${d.phone} <span class="badge orange">보험 재심사</span></div>
       <div class="li-sub">${vehicleLabel(d.vehicle_type)} · ${d.vehicle_number || '-'} · 새 보험만료 ${d.insurance_expires_at || '-'}</div>
       <div class="li-sub">재제출: ${d.insurance_resubmitted_at ? new Date(d.insurance_resubmitted_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) : '-'}</div>
       <div class="li-actions">
-        ${d.insurance_url ? `<button class="btn btn-ghost" onclick="window.open('${esc(d.insurance_url)}','_blank')">📋 보험증서</button>` : ''}
+        ${d.insurance_url ? `<button class="btn btn-ghost" onclick="openDriverDoc('${d.id}','insurance')">📋 보험증서</button>` : ''}
         <button class="btn btn-green" onclick="approveInsuranceM('${d.id}','${esc(d.name||'')}',this)">✅ 재승인</button>
         <button class="btn btn-red" onclick="rejectInsuranceM('${d.id}','${esc(d.name||'')}',this)">↩️ 반려</button>
       </div>
