@@ -1955,6 +1955,17 @@ async function openDriverDetail(id) {
       </div>
     </div>
 
+    <div style="background:var(--bg2);border-radius:10px;padding:14px;margin-bottom:20px;">
+      <div style="font-size:10px;color:var(--text3);margin-bottom:8px;">선호 지역 <span style="color:var(--text3);">(배차 지역 라운드 기준 · 1개)</span></div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <select id="driver-service-area" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--text);font-size:13px;">
+          ${serviceAreaOptions(d.service_area)}
+        </select>
+        <button class="btn btn-green" style="font-size:12px;padding:9px 16px;" onclick="saveDriverServiceArea('${d.id}',this)">저장</button>
+      </div>
+      <div id="driver-service-area-note" style="font-size:11px;color:var(--text3);margin-top:8px;">${serviceAreaNote(d.service_area)}</div>
+    </div>
+
     <div style="margin-bottom:20px;">
       <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:10px;">서류 확인</div>
       <div style="display:flex;gap:10px;">
@@ -2005,6 +2016,55 @@ async function blockDriver(id, name) {
     alert(result.alreadyBlocked ? '이미 차단된 기사입니다' : '차단 완료');
     loadAllDrivers();
   } catch(e) { alert('차단 실패: ' + e.message); }
+}
+
+// ── 기사 선호지역(service_area) 수정 ─────────────────────────────────────
+// 기사앱에 수정 UI가 없어 어드민이 대신 고친다.
+// ★목록은 기사앱 DriverRegistrationScreen의 SEOUL_DISTRICTS/OTHER_REGIONS와 반드시 동일.
+//   dispatch가 .eq('service_area', order.pickup_gu)로 정확일치 필터링하므로(dispatch:227)
+//   값이 어긋나면 그 기사는 지역 라운드 배차에서 제외된다.
+// 저장은 drivers 직접 update가 아니라 admin-action(service_role)을 경유한다(기존 패턴 유지).
+const SEOUL_DISTRICTS_ADMIN = ['강남구','강동구','강북구','강서구','관악구','광진구','구로구','금천구','노원구','도봉구','동대문구','동작구','마포구','서대문구','서초구','성동구','성북구','송파구','양천구','영등포구','용산구','은평구','종로구','중구','중랑구'];
+const OTHER_REGIONS_ADMIN = ['경기도','부산','대구','인천','광주','대전','울산','세종','강원도','충청북도','충청남도','전라북도','전라남도','경상북도','경상남도','제주도'];
+
+function serviceAreaOptions(current) {
+  const cur = current || '';
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  let html = `<option value=""${cur === '' ? ' selected' : ''}>미설정</option>`;
+  html += '<optgroup label="서울">';
+  for (const dist of SEOUL_DISTRICTS_ADMIN) html += `<option value="${esc(dist)}"${cur === dist ? ' selected' : ''}>${esc(dist)}</option>`;
+  html += '</optgroup><optgroup label="서울 외 지역 (지역 라운드 배차 제외)">';
+  for (const r of OTHER_REGIONS_ADMIN) html += `<option value="${esc(r)}"${cur === r ? ' selected' : ''}>${esc(r)}</option>`;
+  html += '</optgroup>';
+  // 목록에 없는 기존 저장값(과거 데이터)도 유실 없이 노출한다.
+  if (cur && !SEOUL_DISTRICTS_ADMIN.includes(cur) && !OTHER_REGIONS_ADMIN.includes(cur)) {
+    html += `<optgroup label="현재 저장값 (목록 외)"><option value="${esc(cur)}" selected>${esc(cur)}</option></optgroup>`;
+  }
+  return html;
+}
+
+function serviceAreaNote(v) {
+  if (!v) return '⚠️ 미설정 — 지역 라운드 배차에서 제외됩니다(반경 배차만 수신).';
+  if (SEOUL_DISTRICTS_ADMIN.includes(v)) return '✅ 픽업지 구와 일치할 때 지역 라운드 배차 대상이 됩니다.';
+  return '⚠️ 서울 외 지역은 픽업지 구와 일치할 수 없어 지역 라운드 배차에서 제외됩니다(반경 배차만 수신).';
+}
+
+async function saveDriverServiceArea(id, btn) {
+  const sel = document.getElementById('driver-service-area');
+  if (!sel) return;
+  const value = sel.value;
+  const prev = btn.textContent;
+  btn.disabled = true; btn.textContent = '저장 중…';
+  try {
+    const result = await callAdminAction('updateDriverServiceArea', { driverId: id, serviceArea: value });
+    const noteEl = document.getElementById('driver-service-area-note');
+    if (noteEl) noteEl.textContent = serviceAreaNote(result.serviceArea || '');
+    alert('선호 지역 저장 완료: ' + (result.serviceArea || '미설정'));
+  } catch(e) {
+    alert('선호 지역 저장 실패: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = prev;
+  }
 }
 
 async function loadPendingDrivers() {
