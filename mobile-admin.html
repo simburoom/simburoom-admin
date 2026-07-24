@@ -203,6 +203,7 @@
           <div class="more-item" onclick="openSub('push')"><span class="ic">🔔</span> 푸시 알림 <span class="arrow">›</span></div>
           <div class="more-item" onclick="openSub('notices')"><span class="ic">📢</span> 공지사항 <span class="arrow">›</span></div>
           <div class="more-item" onclick="openSub('ir')"><span class="ic">🚀</span> IR 지표 (투자 트랙션) <span class="arrow">›</span></div>
+          <div class="more-item" onclick="openSub('etax')"><span class="ic">🧾</span> 세무 신고 (E-TAX) <span class="arrow">›</span></div>
         </div>
       </div>
 
@@ -307,6 +308,32 @@
         <div class="card"><div class="card-head">⭐ 재구매 유저 용도 (당근→일상)</div><div id="ir-purpose" class="ir-card-body"></div></div>
         <div class="card"><div class="card-head">📞 콜 수락률 (dispatch_events)</div><div id="ir-call" class="ir-card-body"></div></div>
         <div class="card"><div class="card-head">🕐 시간대별 주문 분포</div><div id="ir-hourly" class="ir-card-body"></div></div>
+      </div>
+
+      <!-- SUB: 세무 신고 (E-TAX) — DB 읽기 전용 -->
+      <div id="view-etax" class="view">
+        <div class="subhead"><button class="back-btn" onclick="backToMore()">←</button><h2>세무 신고 (E-TAX)</h2></div>
+        <div class="card">
+          <div class="card-head">🧾 E-TAX-1 · 기사 원천징수 대장</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+            <span style="font-size:11px;color:var(--text3);">월</span>
+            <input type="month" id="etax-month" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);">
+            <button class="btn btn-ghost" onclick="etaxLoadWithholding()">조회</button>
+          </div>
+          <div style="font-size:10px;color:var(--text3);margin-bottom:8px;">주민번호는 DB에 없어요 — 면허증 보고 홈택스에 직접 입력.</div>
+          <div id="etax-wh-body" style="overflow-x:auto;"></div>
+        </div>
+        <div class="card">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <span style="font-size:11px;color:var(--text3);">기간(E-TAX-2·3)</span>
+            <input type="date" id="etax-from" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);">
+            <span style="color:var(--text3);">~</span>
+            <input type="date" id="etax-to" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);">
+            <button class="btn btn-ghost" onclick="etaxLoadPeriod()">조회</button>
+          </div>
+        </div>
+        <div class="card"><div class="card-head">💳 E-TAX-3 · 충전/사용/미사용</div><div id="etax-charge-body"></div></div>
+        <div class="card"><div class="card-head">🧮 E-TAX-2 · 부가세 매출(순액)</div><div id="etax-vat-body"></div></div>
       </div>
 
       <!-- SUB: config -->
@@ -530,7 +557,7 @@ async function logout() {
 
 /* ===== Navigation ===== */
 const TAB_TITLES = { home: '홈', drivers: '기사', orders: '주문', area: '지역', more: '더보기' };
-const SUB_TITLES = { agents: '대리점', master: '마스터', coupons: '쿠폰', push: '푸시 알림', notices: '공지사항', config: '앱 설정', ir: 'IR 지표 (투자 트랙션)' };
+const SUB_TITLES = { agents: '대리점', master: '마스터', coupons: '쿠폰', push: '푸시 알림', notices: '공지사항', config: '앱 설정', ir: 'IR 지표 (투자 트랙션)', etax: '세무 신고 (E-TAX)' };
 function setView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + id).classList.add('active');
@@ -554,6 +581,7 @@ function openSub(id) {
   else if (id === 'notices') loadNotices();
   else if (id === 'config') { loadPeakScheduleM(); loadDispatchRadiiM(); }
   else if (id === 'ir') loadIR();
+  else if (id === 'etax') loadEtax();
 }
 function backToMore() {
   setView('more');
@@ -615,12 +643,12 @@ async function irCard(id, fn) {
 }
 function irBig(v){ return `<div style="font-size:28px;font-weight:800;color:var(--brand);">${v}</div>`; }
 function irStat(label,val){ return `<div style="background:var(--bg3);border-radius:8px;padding:10px;"><div style="font-size:10px;color:var(--text3);">${label}</div><div style="font-size:15px;font-weight:800;color:var(--text);margin-top:3px;">${val}</div></div>`; }
-async function irCount(build){ const { count, error } = await build().select('*',{count:'exact',head:true}); if(error) throw error; return count||0; }
+async function irCount(build){ const { count, error } = await build(); if(error) throw error; return count||0; } // ★build()가 .select('*',{count,head})부터 시작해야 함(필터는 select 뒤에서만 체이닝 가능)
 
 async function irSummary(cutoff) {
-  const users = await irCount(()=>{ let q=db.from('users'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
-  const orders = await irCount(()=>{ let q=db.from('orders').in('status',IR_VALID); if(cutoff) q=q.gte('created_at',cutoff); return q; });
-  const completed = await irCount(()=>{ let q=db.from('orders').eq('status','completed'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  const users = await irCount(()=>{ let q=db.from('users').select('*',{count:'exact',head:true}); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  const orders = await irCount(()=>{ let q=db.from('orders').select('*',{count:'exact',head:true}).in('status',IR_VALID); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  const completed = await irCount(()=>{ let q=db.from('orders').select('*',{count:'exact',head:true}).eq('status','completed'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
   const { rows: comp } = await irFetchAll(()=>{ let q=db.from('orders').select('delivery_fee').eq('status','completed'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
   const gmv = comp.reduce((s,o)=>s+(o.delivery_fee||0),0);
   return `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
@@ -640,9 +668,9 @@ async function irRepurchase(cutoff) {
   </table><div style="font-size:10px;color:var(--text3);margin-top:6px;">첫 주문 후 N일 창이 지난 유저만 모수.</div>`;
 }
 async function irMatchRate(cutoff) {
-  const denom = await irCount(()=>{ let q=db.from('orders').not('dispatch_round','is',null); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  const denom = await irCount(()=>{ let q=db.from('orders').select('*',{count:'exact',head:true}).not('dispatch_round','is',null); if(cutoff) q=q.gte('created_at',cutoff); return q; });
   if(!denom) return null;
-  const succ = await irCount(()=>{ let q=db.from('orders').not('dispatch_round','is',null).in('status',['accepted','delivering','completed']); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  const succ = await irCount(()=>{ let q=db.from('orders').select('*',{count:'exact',head:true}).not('dispatch_round','is',null).in('status',['accepted','delivering','completed']); if(cutoff) q=q.gte('created_at',cutoff); return q; });
   return `${irBig(irPct(succ,denom))}<div style="font-size:11px;color:var(--text2);margin-top:4px;">성공 ${succ} / 배차발생 ${denom}</div><div style="font-size:10px;color:var(--text3);margin-top:4px;">성공=수락·배송중·완료 / 모수=dispatch_round 있는 주문</div>`;
 }
 async function irMonthly(cutoff) {
@@ -678,8 +706,8 @@ async function irCallAccept(cutoff) {
   try { const { data:first } = await db.from('dispatch_events').select('created_at').order('created_at',{ascending:true}).limit(1); if(first&&first[0]&&first[0].created_at) logStart=irYm(first[0].created_at); } catch(e){}
   let dispatched, accepted;
   try {
-    dispatched = await irCount(()=>{ let q=db.from('dispatch_events').eq('event_type','dispatched'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
-    accepted   = await irCount(()=>{ let q=db.from('dispatch_events').eq('event_type','accepted');   if(cutoff) q=q.gte('created_at',cutoff); return q; });
+    dispatched = await irCount(()=>{ let q=db.from('dispatch_events').select('*',{count:'exact',head:true}).eq('event_type','dispatched'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+    accepted   = await irCount(()=>{ let q=db.from('dispatch_events').select('*',{count:'exact',head:true}).eq('event_type','accepted');   if(cutoff) q=q.gte('created_at',cutoff); return q; });
   } catch(e) { return `<span style="color:var(--text3);font-size:11px;">dispatch_events 집계 불가 (${e.message||e})</span>`; }
   if(!dispatched) return `<span style="color:var(--text3);font-size:11px;">데이터 없음 / 집계 대기 (로그 시작 ${logStart})</span>`;
   return `${irBig(irPct(accepted,dispatched))}<div style="font-size:11px;color:var(--text2);margin-top:4px;">수락 ${accepted} / 발송 ${dispatched}</div><div style="font-size:10px;color:var(--text3);margin-top:4px;">dispatch_events 로그 시작: <b>${logStart}</b></div>`;
@@ -704,6 +732,94 @@ async function irCohort(cutoff) {
   return `<table style="width:100%;font-size:11.5px;"><tr style="color:var(--text3);"><th style="text-align:left;">가입월</th><th style="text-align:right;">신규</th><th style="text-align:right;">전환</th><th style="text-align:right;">재구매</th></tr>
     ${keys.map(k=>{ const r=coh[k]; return `<tr><td>${k}</td><td style="text-align:right;">${r.n}</td><td style="text-align:right;">${r.conv} (${irPct(r.conv,r.n)})</td><td style="text-align:right;">${r.rep} (${irPct(r.rep,r.n)})</td></tr>`; }).join('')}
   </table><div style="font-size:10px;color:var(--text3);margin-top:6px;">전환=주문 1건+, 재구매=2건+ (주문은 전체기간 기준)</div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 세무 신고 (E-TAX) — DB 읽기 전용. irFetchAll/irWon/esc/openDriverDoc 재사용.
+//   INSERT/UPDATE/DELETE·RLS·GRANT 무변경. 주민번호 저장/조회 없음(면허 썸네일만).
+//   세율=요청 확정 규칙(소득세 3%·지방 0.3%·원천 3.3% / 부가세 과세표준=배송비×20%).
+//   ※세무자료1.md 파일은 리포지토리에 없어 요청문 규칙을 정본으로 사용. 웹(admin.html)과 동일 쿼리.
+// ═══════════════════════════════════════════════════════════════════════════
+const ETAX_INCOME_TYPES = ['delivery','cancel_compensation','pickup_fail_compensation'];
+function etaxKstMonthRange(ym){ if(!/^\d{4}-\d{2}$/.test(ym||'')) return null; const [y,mo]=ym.split('-').map(Number); const s=Date.UTC(y,mo-1,1)-9*3600000, e=Date.UTC(y,mo,1)-9*3600000; return [new Date(s).toISOString(), new Date(e).toISOString()]; }
+function etaxKstDayRange(fromD,toD){ if(!/^\d{4}-\d{2}-\d{2}$/.test(fromD||'')||!/^\d{4}-\d{2}-\d{2}$/.test(toD||'')) return null; const [fy,fm,fd]=fromD.split('-').map(Number); const [ty,tm,td]=toD.split('-').map(Number); const s=Date.UTC(fy,fm-1,fd)-9*3600000, e=Date.UTC(ty,tm-1,td+1)-9*3600000; return [new Date(s).toISOString(), new Date(e).toISOString()]; }
+
+function loadEtax(){
+  if(!document.getElementById('etax-wh-body')) return;
+  const kst=new Date(Date.now()+9*3600000);
+  const ym=kst.toISOString().slice(0,7);
+  const monthEl=document.getElementById('etax-month'); if(monthEl && !monthEl.value) monthEl.value=ym;
+  const y=kst.getUTCFullYear(), mo=kst.getUTCMonth();
+  const fromEl=document.getElementById('etax-from'); if(fromEl && !fromEl.value) fromEl.value=`${y}-${String(mo+1).padStart(2,'0')}-01`;
+  const toEl=document.getElementById('etax-to'); if(toEl && !toEl.value) toEl.value=kst.toISOString().slice(0,10);
+  etaxLoadWithholding();
+  etaxLoadPeriod();
+}
+async function etaxCard(id, fn){ const el=document.getElementById(id); if(!el) return; el.innerHTML='<span style="color:var(--text3);font-size:11px;">집계 중…</span>'; try{ const h=await fn(); el.innerHTML=h||'<span style="color:var(--text3);font-size:11px;">데이터 없음 / 집계 대기</span>'; }catch(e){ el.innerHTML=`<span style="color:var(--red);font-size:11px;">집계 실패: ${(e&&e.message)?e.message:e}</span>`; } }
+
+async function etaxLoadWithholding(){
+  const el=document.getElementById('etax-wh-body'); if(!el) return;
+  const ym=(document.getElementById('etax-month')||{}).value;
+  const r=etaxKstMonthRange(ym); if(!r){ el.innerHTML='<span style="color:var(--text3);font-size:11px;">월을 선택하세요.</span>'; return; }
+  el.innerHTML='<span style="color:var(--text3);font-size:11px;">집계 중…</span>';
+  try{
+    const { rows } = await irFetchAll(()=>db.from('driver_compensations').select('driver_id, amount, type').gte('created_at',r[0]).lt('created_at',r[1]).in('type',ETAX_INCOME_TYPES));
+    if(!rows.length){ el.innerHTML='<span style="color:var(--text3);font-size:11px;">집계 대기 (해당 월 지급 내역 없음)</span>'; return; }
+    const byD={};
+    for(const c of rows){ if(!c.driver_id) continue; const g=(byD[c.driver_id]=byD[c.driver_id]||{del:0,comp:0,cnt:0}); if(c.type==='delivery'){ g.del+=c.amount||0; g.cnt++; } else { g.comp+=c.amount||0; } }
+    const ids=Object.keys(byD);
+    const { rows: drv } = await irFetchAll(()=>db.from('drivers').select('id, name, license_url').in('id',ids));
+    const dmap={}; for(const d of drv){ dmap[d.id]=d; rememberDriverDocs(d); }
+    const T={cnt:0,del:0,comp:0,tot:0,it:0,lt:0,wh:0};
+    const body=ids.map(id=>{ const g=byD[id]; const tot=g.del+g.comp; const it=Math.floor(tot*0.03), lt=Math.floor(tot*0.003), wh=it+lt;
+      T.cnt+=g.cnt;T.del+=g.del;T.comp+=g.comp;T.tot+=tot;T.it+=it;T.lt+=lt;T.wh+=wh;
+      const d=dmap[id]||{}; const nm=esc(d.name||'(이름없음)'); const lic=d.license_url?`<button class="btn btn-ghost" style="padding:3px 8px;font-size:10px;" onclick="openDriverDoc('${id}','license')">면허</button>`:'<span style="color:var(--text3);font-size:10px;">미제출</span>';
+      return `<tr><td>${nm}</td><td style="text-align:right;">${g.cnt}</td><td style="text-align:right;">${irWon(g.del)}</td><td style="text-align:right;">${irWon(g.comp)}</td><td style="text-align:right;font-weight:700;">${irWon(tot)}</td><td style="text-align:right;">${irWon(it)}</td><td style="text-align:right;">${irWon(lt)}</td><td style="text-align:right;font-weight:700;color:var(--brand);">${irWon(wh)}</td><td>${lic}</td></tr>`;
+    }).join('');
+    el.innerHTML=`<table style="width:100%;font-size:11px;border-collapse:collapse;min-width:640px;">
+      <tr style="color:var(--text3);text-align:right;"><th style="text-align:left;">기사</th><th>완료</th><th>배송적립</th><th>보상적립</th><th>지급총액</th><th>소득세3%</th><th>지방0.3%</th><th>원천3.3%</th><th style="text-align:left;">면허</th></tr>
+      ${body}
+      <tr style="border-top:2px solid var(--border);font-weight:800;"><td>합계(${ids.length})</td><td style="text-align:right;">${T.cnt}</td><td style="text-align:right;">${irWon(T.del)}</td><td style="text-align:right;">${irWon(T.comp)}</td><td style="text-align:right;">${irWon(T.tot)}</td><td style="text-align:right;">${irWon(T.it)}</td><td style="text-align:right;">${irWon(T.lt)}</td><td style="text-align:right;color:var(--brand);">${irWon(T.wh)}</td><td></td></tr>
+    </table>
+    <div style="font-size:10px;color:var(--text3);margin-top:8px;">지급총액=배송적립(delivery)+보상적립(취소·헛걸음). 원천징수=지급총액 기준(3%+0.3%). gross 기준(실 원천징수는 출금 시 차감). ${ym} (KST).</div>`;
+  }catch(e){ el.innerHTML=`<span style="color:var(--red);font-size:11px;">집계 실패: ${(e&&e.message)?e.message:e}</span>`; }
+}
+
+function etaxLoadPeriod(){
+  const from=(document.getElementById('etax-from')||{}).value, to=(document.getElementById('etax-to')||{}).value;
+  const r=etaxKstDayRange(from,to);
+  if(!r){ ['etax-charge-body','etax-vat-body'].forEach(i=>{const el=document.getElementById(i); if(el) el.innerHTML='<span style="color:var(--text3);font-size:11px;">기간을 선택하세요.</span>';}); return; }
+  etaxCard('etax-charge-body', ()=>etaxChargeReport(r, from, to));
+  etaxCard('etax-vat-body', ()=>etaxVat(r, from, to));
+}
+
+async function etaxChargeReport(r, from, to){
+  const { rows: ch } = await irFetchAll(()=>db.from('charge_history').select('amount, cancelled_amount').eq('status','completed').gte('created_at',r[0]).lt('created_at',r[1]));
+  const gross=ch.reduce((s,x)=>s+(x.amount||0),0), canc=ch.reduce((s,x)=>s+(x.cancelled_amount||0),0), net=gross-canc;
+  const { rows: used } = await irFetchAll(()=>db.from('orders').select('delivery_fee').eq('status','completed').gte('completed_at',r[0]).lt('completed_at',r[1]));
+  const usedSum=used.reduce((s,o)=>s+(o.delivery_fee||0),0);
+  const { rows: u } = await irFetchAll(()=>db.from('users').select('charge_balance'));
+  const bal=u.reduce((s,x)=>s+(x.charge_balance||0),0);
+  return `<table style="width:100%;font-size:13px;">
+    <tr><td>충전총액(실결제)</td><td style="text-align:right;font-weight:800;">${irWon(net)}</td></tr>
+    <tr><td style="color:var(--text3);font-size:11px;padding-left:8px;">└ 승인 ${irWon(gross)} − 취소 ${irWon(canc)} · ${ch.length}건</td><td></td></tr>
+    <tr><td>사용총액(완료 배송비)</td><td style="text-align:right;font-weight:800;">${irWon(usedSum)}</td></tr>
+    <tr><td style="color:var(--text3);font-size:11px;padding-left:8px;">└ 완료 ${used.length}건</td><td></td></tr>
+    <tr><td>현재 미사용 잔액(전체)</td><td style="text-align:right;font-weight:800;">${irWon(bal)}</td></tr>
+  </table>
+  <div style="font-size:10px;color:var(--text3);margin-top:8px;">${from}~${to} (KST). 충전=Σamount−Σcancelled_amount(승인분). 미사용잔액은 현재 스냅샷(기간 무관).</div>`;
+}
+
+async function etaxVat(r, from, to){
+  const { rows } = await irFetchAll(()=>db.from('orders').select('delivery_fee').eq('status','completed').gte('completed_at',r[0]).lt('completed_at',r[1]));
+  if(!rows.length) return null;
+  const fare=rows.reduce((s,o)=>s+(o.delivery_fee||0),0), commission=Math.floor(fare*0.2);
+  return `<table style="width:100%;font-size:13px;">
+    <tr><td>총배송비(완료분)</td><td style="text-align:right;font-weight:800;">${irWon(fare)}</td></tr>
+    <tr><td style="color:var(--text3);font-size:11px;padding-left:8px;">└ 완료 ${rows.length}건</td><td></td></tr>
+    <tr><td>중개수수료(과세표준 20%)</td><td style="text-align:right;font-weight:800;color:var(--brand);">${irWon(commission)}</td></tr>
+  </table>
+  <div style="font-size:10px;color:var(--text3);margin-top:8px;">${from}~${to} (KST). 과세표준=총배송비×20%. 쿠폰차감분은 포인트라 배송비 미반영(별도).</div>`;
 }
 
 /* ===== 피크타임 차단 시간표 ===== */
