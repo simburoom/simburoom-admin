@@ -202,6 +202,7 @@
           <div class="more-item" onclick="openSub('coupons')"><span class="ic">🎫</span> 쿠폰 관리 <span class="arrow">›</span></div>
           <div class="more-item" onclick="openSub('push')"><span class="ic">🔔</span> 푸시 알림 <span class="arrow">›</span></div>
           <div class="more-item" onclick="openSub('notices')"><span class="ic">📢</span> 공지사항 <span class="arrow">›</span></div>
+          <div class="more-item" onclick="openSub('ir')"><span class="ic">🚀</span> IR 지표 (투자 트랙션) <span class="arrow">›</span></div>
         </div>
       </div>
 
@@ -283,6 +284,29 @@
         </div>
         <div class="section-title">공지 목록</div>
         <div id="notice-list"><div class="empty">로딩 중...</div></div>
+      </div>
+
+      <!-- SUB: IR 지표 (투자 트랙션) — DB 읽기 전용 -->
+      <div id="view-ir" class="view">
+        <div class="subhead"><button class="back-btn" onclick="backToMore()">←</button><h2>IR 지표</h2></div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+          <span style="font-size:11px;color:var(--text3);">기간</span>
+          <button class="btn btn-ghost ir-period-btn" data-m="0" onclick="setIrPeriod(0)">전체</button>
+          <button class="btn btn-ghost ir-period-btn" data-m="3" onclick="setIrPeriod(3)">3개월</button>
+          <button class="btn btn-ghost ir-period-btn" data-m="6" onclick="setIrPeriod(6)">6개월</button>
+          <button class="btn btn-ghost ir-period-btn" data-m="12" onclick="setIrPeriod(12)">12개월</button>
+          <button class="btn btn-ghost" onclick="loadIR()">🔄</button>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px;">집계 기간: <b id="ir-period-label">전체 기간</b> · 무거운 지표(코호트·시간대·재구매)는 선택 기간만 조회</div>
+        <div class="card"><div class="card-head">📌 요약</div><div id="ir-summary" class="ir-card-body"></div></div>
+        <div class="card"><div class="card-head">🔁 재구매율 (30/60/90일)</div><div id="ir-repurchase" class="ir-card-body"></div></div>
+        <div class="card"><div class="card-head">👥 월별 코호트 (신규·전환·재구매)</div><div id="ir-cohort" class="ir-card-body"></div></div>
+        <div class="card"><div class="card-head">🎯 매칭 성공률 (orders 기반)</div><div id="ir-match" class="ir-card-body"></div></div>
+        <div class="card"><div class="card-head">📈 월별 완료 추이 + MoM</div><div id="ir-monthly" class="ir-card-body"></div></div>
+        <div class="card"><div class="card-head">💵 건당 평균 마진</div><div id="ir-margin" class="ir-card-body"></div></div>
+        <div class="card"><div class="card-head">⭐ 재구매 유저 용도 (당근→일상)</div><div id="ir-purpose" class="ir-card-body"></div></div>
+        <div class="card"><div class="card-head">📞 콜 수락률 (dispatch_events)</div><div id="ir-call" class="ir-card-body"></div></div>
+        <div class="card"><div class="card-head">🕐 시간대별 주문 분포</div><div id="ir-hourly" class="ir-card-body"></div></div>
       </div>
 
       <!-- SUB: config -->
@@ -506,7 +530,7 @@ async function logout() {
 
 /* ===== Navigation ===== */
 const TAB_TITLES = { home: '홈', drivers: '기사', orders: '주문', area: '지역', more: '더보기' };
-const SUB_TITLES = { agents: '대리점', master: '마스터', coupons: '쿠폰', push: '푸시 알림', notices: '공지사항', config: '앱 설정' };
+const SUB_TITLES = { agents: '대리점', master: '마스터', coupons: '쿠폰', push: '푸시 알림', notices: '공지사항', config: '앱 설정', ir: 'IR 지표 (투자 트랙션)' };
 function setView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + id).classList.add('active');
@@ -529,10 +553,157 @@ function openSub(id) {
   else if (id === 'coupons') loadCoupons();
   else if (id === 'notices') loadNotices();
   else if (id === 'config') { loadPeakScheduleM(); loadDispatchRadiiM(); }
+  else if (id === 'ir') loadIR();
 }
 function backToMore() {
   setView('more');
   document.getElementById('topbar-title').textContent = '더보기';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IR 지표 (투자 트랙션) — 전부 DB 읽기 전용. 어드민 기존 db(anon+세션) 그대로 사용.
+//   INSERT/UPDATE/DELETE·RLS·GRANT 무변경. PostgREST max_rows(1000) 대비 페이지네이션.
+//   웹(admin.html)과 동일 로직 — 모바일 색상(--brand)·단일컬럼 레이아웃만 다름.
+// ═══════════════════════════════════════════════════════════════════════════
+let irPeriodMonths = 0; // 0 = 전체
+const IR_VALID = ['waiting','accepted','delivering','completed','cancelled','failed','timeout','rejected','pickup_failed'];
+const irYm = iso => iso ? String(iso).slice(0,7) : '?';
+const irPct = (n,d) => d>0 ? (100*n/d).toFixed(1)+'%' : '—';
+const irWon = n => (n||0).toLocaleString()+'원';
+
+function irCutoffISO() { if (!irPeriodMonths) return null; const d=new Date(); d.setMonth(d.getMonth()-irPeriodMonths); return d.toISOString(); }
+function irStyleButtons() {
+  document.querySelectorAll('.ir-period-btn').forEach(b => { const on=Number(b.dataset.m)===irPeriodMonths; b.style.background = on?'var(--brand)':''; b.style.color = on?'#fff':''; });
+  const lbl=document.getElementById('ir-period-label'); if(lbl) lbl.textContent = irPeriodMonths ? `최근 ${irPeriodMonths}개월` : '전체 기간';
+}
+function setIrPeriod(m){ irPeriodMonths=m; loadIR(); }
+
+async function irFetchAll(buildQuery, pageSize = 1000, maxPages = 60) {
+  let rows=[], from=0, page=0, truncated=false;
+  while (page < maxPages) {
+    const { data, error } = await buildQuery().range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    rows = rows.concat(data);
+    if (data.length < pageSize) break;
+    from += pageSize; page++;
+    if (page >= maxPages) truncated = true;
+  }
+  return { rows, truncated };
+}
+
+function loadIR() {
+  irStyleButtons();
+  if (!document.getElementById('ir-summary')) return;
+  ['ir-summary','ir-repurchase','ir-cohort','ir-match','ir-monthly','ir-margin','ir-purpose','ir-call','ir-hourly']
+    .forEach(i => { const el=document.getElementById(i); if(el) el.innerHTML='<span style="color:var(--text3);font-size:11px;">집계 중…</span>'; });
+  const cutoff = irCutoffISO();
+  irCard('ir-summary',   () => irSummary(cutoff));
+  irCard('ir-repurchase',() => irRepurchase(cutoff));
+  irCard('ir-cohort',    () => irCohort(cutoff));
+  irCard('ir-match',     () => irMatchRate(cutoff));
+  irCard('ir-monthly',   () => irMonthly(cutoff));
+  irCard('ir-margin',    () => irMargin(cutoff));
+  irCard('ir-purpose',   () => irPurpose(cutoff));
+  irCard('ir-call',      () => irCallAccept(cutoff));
+  irCard('ir-hourly',    () => irHourly(cutoff));
+}
+async function irCard(id, fn) {
+  const el = document.getElementById(id); if (!el) return;
+  try { const html = await fn(); el.innerHTML = html || '<span style="color:var(--text3);font-size:11px;">데이터 없음 / 집계 대기</span>'; }
+  catch (e) { el.innerHTML = `<span style="color:var(--red);font-size:11px;">집계 실패: ${(e&&e.message)?e.message:e}</span>`; }
+}
+function irBig(v){ return `<div style="font-size:28px;font-weight:800;color:var(--brand);">${v}</div>`; }
+function irStat(label,val){ return `<div style="background:var(--bg3);border-radius:8px;padding:10px;"><div style="font-size:10px;color:var(--text3);">${label}</div><div style="font-size:15px;font-weight:800;color:var(--text);margin-top:3px;">${val}</div></div>`; }
+async function irCount(build){ const { count, error } = await build().select('*',{count:'exact',head:true}); if(error) throw error; return count||0; }
+
+async function irSummary(cutoff) {
+  const users = await irCount(()=>{ let q=db.from('users'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  const orders = await irCount(()=>{ let q=db.from('orders').in('status',IR_VALID); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  const completed = await irCount(()=>{ let q=db.from('orders').eq('status','completed'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  const { rows: comp } = await irFetchAll(()=>{ let q=db.from('orders').select('delivery_fee').eq('status','completed'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  const gmv = comp.reduce((s,o)=>s+(o.delivery_fee||0),0);
+  return `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
+    ${irStat('가입 유저',(users).toLocaleString())}${irStat('유효 주문',(orders).toLocaleString())}
+    ${irStat('완료 주문',(completed).toLocaleString())}${irStat('완료율',irPct(completed,orders))}
+    ${irStat('GMV(완료)',irWon(gmv))}${irStat('플랫폼매출(20%)',irWon(Math.floor(gmv*0.2)))}
+  </div>`;
+}
+async function irRepurchase(cutoff) {
+  const { rows } = await irFetchAll(()=>{ let q=db.from('orders').select('buyer_id, created_at').in('status',IR_VALID).order('created_at',{ascending:true}); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  if(!rows.length) return null;
+  const byUser={}; for(const o of rows){ if(!o.buyer_id) continue; (byUser[o.buyer_id]=byUser[o.buyer_id]||[]).push(new Date(o.created_at).getTime()); }
+  const now=Date.now(), DAY=86400000;
+  const out=[30,60,90].map(N=>{ let denom=0,rep=0; for(const uid in byUser){ const ts=byUser[uid], first=ts[0]; if(now-first<N*DAY) continue; denom++; if(ts.some(t=>t>first&&t-first<=N*DAY)) rep++; } return {N,denom,rep}; });
+  return `<table style="width:100%;font-size:12px;border-collapse:collapse;"><tr style="color:var(--text3);"><th style="text-align:left;">기간</th><th style="text-align:right;">모수</th><th style="text-align:right;">재구매</th><th style="text-align:right;">율</th></tr>
+    ${out.map(r=>`<tr><td>${r.N}일</td><td style="text-align:right;">${r.denom}</td><td style="text-align:right;">${r.rep}</td><td style="text-align:right;font-weight:700;color:var(--brand);">${irPct(r.rep,r.denom)}</td></tr>`).join('')}
+  </table><div style="font-size:10px;color:var(--text3);margin-top:6px;">첫 주문 후 N일 창이 지난 유저만 모수.</div>`;
+}
+async function irMatchRate(cutoff) {
+  const denom = await irCount(()=>{ let q=db.from('orders').not('dispatch_round','is',null); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  if(!denom) return null;
+  const succ = await irCount(()=>{ let q=db.from('orders').not('dispatch_round','is',null).in('status',['accepted','delivering','completed']); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  return `${irBig(irPct(succ,denom))}<div style="font-size:11px;color:var(--text2);margin-top:4px;">성공 ${succ} / 배차발생 ${denom}</div><div style="font-size:10px;color:var(--text3);margin-top:4px;">성공=수락·배송중·완료 / 모수=dispatch_round 있는 주문</div>`;
+}
+async function irMonthly(cutoff) {
+  const { rows } = await irFetchAll(()=>{ let q=db.from('orders').select('completed_at').eq('status','completed'); if(cutoff) q=q.gte('completed_at',cutoff); return q; });
+  if(!rows.length) return null;
+  const m={}; for(const o of rows){ if(!o.completed_at) continue; const k=irYm(o.completed_at); m[k]=(m[k]||0)+1; }
+  const keys=Object.keys(m).sort(); if(!keys.length) return null;
+  let prev=null;
+  const body=keys.map(k=>{ const c=m[k]; let mom='—'; if(prev!=null&&prev>0){ const g=(c-prev)/prev*100; mom=(g>=0?'+':'')+g.toFixed(0)+'%'; } prev=c; return `<tr><td>${k}</td><td style="text-align:right;">${c}</td><td style="text-align:right;color:${mom.startsWith('-')?'var(--red)':'var(--green)'};">${mom}</td></tr>`; }).join('');
+  return `<table style="width:100%;font-size:12px;"><tr style="color:var(--text3);"><th style="text-align:left;">월(완료)</th><th style="text-align:right;">건수</th><th style="text-align:right;">MoM</th></tr>${body}</table>`;
+}
+async function irMargin(cutoff) {
+  const { rows } = await irFetchAll(()=>{ let q=db.from('orders').select('delivery_fee').eq('status','completed'); if(cutoff) q=q.gte('completed_at',cutoff); return q; });
+  if(!rows.length) return null;
+  const avg = rows.reduce((s,o)=>s+(o.delivery_fee||0),0)/rows.length;
+  return `${irBig(irWon(Math.round(avg*0.2)))}<div style="font-size:11px;color:var(--text2);margin-top:4px;">평균 배송비 ${irWon(Math.round(avg))} × 20%</div><div style="font-size:10px;color:var(--text3);margin-top:2px;">완료 ${rows.length}건 평균</div>`;
+}
+async function irPurpose(cutoff) {
+  const { rows } = await irFetchAll(()=>{ let q=db.from('orders').select('buyer_id, purpose, created_at').in('status',IR_VALID).order('created_at',{ascending:true}); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  if(!rows.length) return null;
+  const byUser={}; for(const o of rows){ if(!o.buyer_id) continue; (byUser[o.buyer_id]=byUser[o.buyer_id]||[]).push(o); }
+  let ut=0,daily=0,other=0,switchers=0,repeatUsers=0;
+  for(const uid in byUser){ const os=byUser[uid]; if(os.length<2) continue; repeatUsers++; for(const o of os){ if(o.purpose==='used_trade') ut++; else if(o.purpose==='daily') daily++; else other++; } if(os[0].purpose==='used_trade'&&os.slice(1).some(o=>o.purpose==='daily')) switchers++; }
+  if(!repeatUsers) return null;
+  const tot=ut+daily+other;
+  return `<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">재구매 유저 ${repeatUsers}명의 주문 용도</div>
+    <table style="width:100%;font-size:12px;"><tr><td>당근/중고거래</td><td style="text-align:right;">${ut} (${irPct(ut,tot)})</td></tr>
+    <tr><td>일상(daily)</td><td style="text-align:right;">${daily} (${irPct(daily,tot)})</td></tr>${other?`<tr><td>기타/미지정</td><td style="text-align:right;">${other} (${irPct(other,tot)})</td></tr>`:''}</table>
+    <div style="margin-top:8px;padding:8px;background:var(--brand-dim);border-radius:8px;font-size:12px;color:var(--text);">⭐ 당근 시작→일상 전환: <b>${switchers}명</b></div>`;
+}
+async function irCallAccept(cutoff) {
+  let logStart='미확인';
+  try { const { data:first } = await db.from('dispatch_events').select('created_at').order('created_at',{ascending:true}).limit(1); if(first&&first[0]&&first[0].created_at) logStart=irYm(first[0].created_at); } catch(e){}
+  let dispatched, accepted;
+  try {
+    dispatched = await irCount(()=>{ let q=db.from('dispatch_events').eq('event_type','dispatched'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+    accepted   = await irCount(()=>{ let q=db.from('dispatch_events').eq('event_type','accepted');   if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  } catch(e) { return `<span style="color:var(--text3);font-size:11px;">dispatch_events 집계 불가 (${e.message||e})</span>`; }
+  if(!dispatched) return `<span style="color:var(--text3);font-size:11px;">데이터 없음 / 집계 대기 (로그 시작 ${logStart})</span>`;
+  return `${irBig(irPct(accepted,dispatched))}<div style="font-size:11px;color:var(--text2);margin-top:4px;">수락 ${accepted} / 발송 ${dispatched}</div><div style="font-size:10px;color:var(--text3);margin-top:4px;">dispatch_events 로그 시작: <b>${logStart}</b></div>`;
+}
+async function irHourly(cutoff) {
+  const { rows } = await irFetchAll(()=>{ let q=db.from('orders').select('hour_of_day').in('status',IR_VALID); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  if(!rows.length) return null;
+  const h=new Array(24).fill(0); let known=0;
+  for(const o of rows){ const x=o.hour_of_day; if(x!=null&&x>=0&&x<24){ h[x]++; known++; } }
+  if(!known) return null;
+  const max=Math.max.apply(null,h);
+  return `<div>${h.map((c,i)=>{ const w=max?Math.round(c/max*100):0; return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;"><span style="width:32px;color:var(--text3);font-size:10px;">${String(i).padStart(2,'0')}시</span><div style="flex:1;background:var(--bg3);border-radius:3px;overflow:hidden;"><div style="height:11px;width:${w}%;background:var(--brand);"></div></div><span style="width:32px;text-align:right;font-size:10px;color:var(--text2);">${c}</span></div>`; }).join('')}</div>`;
+}
+async function irCohort(cutoff) {
+  const { rows: users } = await irFetchAll(()=>{ let q=db.from('users').select('id, created_at'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
+  if(!users.length) return null;
+  const { rows: ord } = await irFetchAll(()=>db.from('orders').select('buyer_id').in('status',IR_VALID));
+  const oc={}; for(const o of ord){ if(o.buyer_id) oc[o.buyer_id]=(oc[o.buyer_id]||0)+1; }
+  const coh={};
+  for(const u of users){ const k=irYm(u.created_at); const r=(coh[k]=coh[k]||{n:0,conv:0,rep:0}); r.n++; const c=oc[u.id]||0; if(c>=1) r.conv++; if(c>=2) r.rep++; }
+  const keys=Object.keys(coh).sort();
+  return `<table style="width:100%;font-size:11.5px;"><tr style="color:var(--text3);"><th style="text-align:left;">가입월</th><th style="text-align:right;">신규</th><th style="text-align:right;">전환</th><th style="text-align:right;">재구매</th></tr>
+    ${keys.map(k=>{ const r=coh[k]; return `<tr><td>${k}</td><td style="text-align:right;">${r.n}</td><td style="text-align:right;">${r.conv} (${irPct(r.conv,r.n)})</td><td style="text-align:right;">${r.rep} (${irPct(r.rep,r.n)})</td></tr>`; }).join('')}
+  </table><div style="font-size:10px;color:var(--text3);margin-top:6px;">전환=주문 1건+, 재구매=2건+ (주문은 전체기간 기준)</div>`;
 }
 
 /* ===== 피크타임 차단 시간표 ===== */
