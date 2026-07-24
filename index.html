@@ -167,24 +167,25 @@ tbody tr:last-child td { border-bottom: none; }
   <div class="nav-section">운영</div>
   <div class="nav-item" onclick="showSection('orders', this)"><span class="icon">📦</span> 주문 관리</div>
   <div class="nav-item" onclick="showSection('pickup_fail', this)"><span class="icon">⚠️</span> 픽업 불가 신고 <span class="nav-badge orange" id="pickup-fail-badge">0</span></div>
-  <div class="nav-section">회원</div>
+  <div class="nav-item" onclick="showSection('map', this)"><span class="icon">🗺️</span> 실시간 위치</div>
+  <div class="nav-section">회원·파트너</div>
   <div class="nav-item" onclick="showSection('users', this)"><span class="icon">👤</span> 유저 관리</div>
   <div class="nav-item" onclick="showSection('drivers', this)"><span class="icon">🛵</span> 기사 관리</div>
-  <div class="nav-section">정산</div>
-  <div class="nav-item" onclick="showSection('settlement', this)"><span class="icon">💰</span> 정산 관리 <span class="nav-badge orange" id="settlement-badge">0</span></div>
-  <div class="nav-item" onclick="showSection('refund', this)"><span class="icon">↩️</span> 환불 관리 <span class="nav-badge orange" id="refund-badge">0</span></div>
   <div class="nav-item" onclick="showSection('agents', this)"><span class="icon">🏢</span> 대리점 관리</div>
-  <div class="nav-section">도구</div>
-  <div class="nav-item" onclick="showSection('push', this)"><span class="icon">🔔</span> 푸시 알림</div>
+  <div class="nav-section">정산</div>
+  <div class="nav-item" onclick="showSection('settlement', this)"><span class="icon">💰</span> 기사 출금 관리 <span class="nav-badge orange" id="settlement-badge">0</span></div>
+  <div class="nav-item" onclick="showSection('refund', this)"><span class="icon">↩️</span> 환불 관리 <span class="nav-badge orange" id="refund-badge">0</span></div>
+  <div class="nav-section">마케팅·소통</div>
   <div class="nav-item" onclick="showSection('notice', this)"><span class="icon">📢</span> 공지사항</div>
+  <div class="nav-item" onclick="showSection('push', this)"><span class="icon">🔔</span> 푸시 알림</div>
   <div class="nav-item" onclick="showSection('coupon', this)"><span class="icon">🎫</span> 쿠폰 관리</div>
-  <div class="nav-item" onclick="showSection('map', this)"><span class="icon">🗺️</span> 기사 위치 추적</div>
-  <div class="nav-item" onclick="showSection('analytics', this)"><span class="icon">📈</span> 데이터 분석</div>
+  <div class="nav-section">분석·리포트</div>
+  <div class="nav-item" onclick="showSection('analytics', this)"><span class="icon">📈</span> 운영 분석</div>
   <div class="nav-item" onclick="showSection('ir', this)"><span class="icon">🚀</span> IR 지표</div>
   <div class="nav-item" onclick="showSection('etax', this)"><span class="icon">🧾</span> 세무 신고 (E-TAX)</div>
   <div class="nav-section">설정</div>
-  <div class="nav-item" onclick="showSection('config', this)"><span class="icon">⚙️</span> 앱 설정</div>
-  <div class="nav-item" onclick="showSection('service_area', this)"><span class="icon">🗺️</span> 서비스 지역 관리</div>
+  <div class="nav-item" onclick="showSection('config', this)"><span class="icon">⚙️</span> 운영 설정</div>
+  <div class="nav-item" onclick="showSection('service_area', this)"><span class="icon">🗺️</span> 서비스 지역</div>
   <div class="nav-item" id="nav-master" style="display:none;" onclick="showSection('master', this)"><span class="icon">🔐</span> 마스터 관리 <span class="nav-badge" id="master-pending-badge" style="display:none;">0</span></div>
   <div class="sidebar-footer">
     <div class="admin-avatar">👑</div>
@@ -382,7 +383,7 @@ tbody tr:last-child td { border-bottom: none; }
   <!-- ===== 정산 관리 ===== -->
   <div id="settlement" class="section">
     <div class="section-header">
-      <div><div class="section-header-title">정산 관리</div><div class="section-header-sub">출금 요청 처리</div></div>
+      <div><div class="section-header-title">기사 출금 관리</div><div class="section-header-sub">출금 요청 처리</div></div>
       <button class="btn btn-ghost" onclick="loadWithdrawalRequests()">🔄 새로고침</button>
     </div>
     <div class="filter-bar">
@@ -535,7 +536,7 @@ tbody tr:last-child td { border-bottom: none; }
   <!-- ===== 데이터 분석 ===== -->
   <div id="analytics" class="section">
     <div class="section-header">
-      <div><div class="section-header-title">데이터 분석</div><div class="section-header-sub">배송비 수락률, 지역 선호도, ML 학습 데이터</div></div>
+      <div><div class="section-header-title">운영 분석</div><div class="section-header-sub">배송비 수락률, 지역 선호도, ML 학습 데이터</div></div>
       <button class="btn btn-ghost" onclick="loadAnalytics()">🔄 새로고침</button>
     </div>
     <div class="grid-2" style="margin-bottom:16px;">
@@ -626,7 +627,7 @@ tbody tr:last-child td { border-bottom: none; }
   <!-- ===== 기사 위치 추적 ===== -->
   <div id="map" class="section">
     <div class="section-header">
-      <div><div class="section-header-title">기사 위치 추적</div><div class="section-header-sub">실시간 위치 및 이동 경로</div></div>
+      <div><div class="section-header-title">실시간 위치</div><div class="section-header-sub">실시간 위치 및 이동 경로</div></div>
       <button class="btn btn-ghost" onclick="loadMap()">🔄 새로고침</button>
     </div>
     <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;">
@@ -896,7 +897,7 @@ tbody tr:last-child td { border-bottom: none; }
   <!-- ===== 서비스 지역 관리 ===== -->
   <div id="service_area" class="section">
     <div class="section-header">
-      <div><div class="section-header-title">서비스 지역 관리</div><div class="section-header-sub">오픈 지역 설정 및 수요 조회</div></div>
+      <div><div class="section-header-title">서비스 지역</div><div class="section-header-sub">오픈 지역 설정 및 수요 조회</div></div>
       <button class="btn btn-ghost" onclick="loadServiceAreas()">🔄 새로고침</button>
     </div>
 
@@ -915,7 +916,7 @@ tbody tr:last-child td { border-bottom: none; }
   <!-- ===== 앱 설정 ===== -->
   <div id="config" class="section">
     <div class="section-header">
-      <div><div class="section-header-title">앱 설정</div><div class="section-header-sub">서비스 운영 설정</div></div>
+      <div><div class="section-header-title">운영 설정</div><div class="section-header-sub">서비스 운영 설정</div></div>
     </div>
     <div class="grid-2">
       <div class="card">
@@ -1154,7 +1155,7 @@ function showSection(id, el) {
   document.getElementById(id).classList.add('active');
   if (el) el.classList.add('active');
   currentSection = id;
-  const titles = { dashboard:'대시보드', orders:'주문 관리', pickup_fail:'픽업 불가 신고', users:'유저 관리', drivers:'기사 관리', settlement:'정산 관리', refund:'환불 관리', push:'푸시 알림', notice:'공지사항', coupon:'쿠폰 관리', analytics:'데이터 분석', ir:'IR 지표 (투자 트랙션)', etax:'세무 신고 (E-TAX)', config:'앱 설정', service_area:'서비스 지역 관리', map:'기사 위치 추적', agents:'대리점 관리', master:'마스터 관리' };
+  const titles = { dashboard:'대시보드', orders:'주문 관리', pickup_fail:'픽업 불가 신고', users:'유저 관리', drivers:'기사 관리', settlement:'기사 출금 관리', refund:'환불 관리', push:'푸시 알림', notice:'공지사항', coupon:'쿠폰 관리', analytics:'운영 분석', ir:'IR 지표 (투자 트랙션)', etax:'세무 신고 (E-TAX)', config:'운영 설정', service_area:'서비스 지역', map:'실시간 위치', agents:'대리점 관리', master:'마스터 관리' };
   document.getElementById('topbar-title').textContent = titles[id] || id;
   if (id === 'dashboard') loadDashboard();
   else if (id === 'orders') setOrderPeriod('today');
@@ -1351,7 +1352,13 @@ async function irCallAccept(cutoff) {
   try {
     dispatched = await irCount(()=>{ let q=db.from('dispatch_events').select('*',{count:'exact',head:true}).eq('event_type','dispatched'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
     accepted   = await irCount(()=>{ let q=db.from('dispatch_events').select('*',{count:'exact',head:true}).eq('event_type','accepted');   if(cutoff) q=q.gte('created_at',cutoff); return q; });
-  } catch(e) { return `<span style="color:var(--text3);font-size:11px;">dispatch_events 집계 불가 (${e.message||e})</span>`; }
+  } catch(e) {
+    // [임시 진단] 에러 원인 전체 노출(RLS 42501 등 식별용). 원인 확정 후 원복 예정.
+    console.error('[IR 콜수락률] dispatch_events 에러 원본:', e);
+    let dbg; try { dbg = JSON.stringify(e, Object.getOwnPropertyNames(e||{})); } catch(_) { dbg = String(e); }
+    const parts = []; if(e){ if(e.message)parts.push('message='+e.message); if(e.code)parts.push('code='+e.code); if(e.details)parts.push('details='+e.details); if(e.hint)parts.push('hint='+e.hint); }
+    return `<span style="color:var(--red);font-size:11px;">dispatch_events 집계 불가<br>${parts.join(' · ')}<br><span style="color:var(--text3);word-break:break-all;">${dbg}</span></span>`;
+  }
   if(!dispatched) return `<span style="color:var(--text3);font-size:11px;">데이터 없음 / 집계 대기 (로그 시작 ${logStart})</span>`;
   return `${irBig(irPct(accepted,dispatched))}<div style="font-size:11px;color:var(--text2);margin-top:4px;">수락 ${accepted} / 발송 ${dispatched} (콜×기사)</div><div style="font-size:10px;color:var(--text3);margin-top:4px;">dispatch_events 로그 시작: <b>${logStart}</b></div>`;
 }
