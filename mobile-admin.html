@@ -793,7 +793,7 @@ async function rejectInsuranceM(id, name, btn) {
 }
 
 async function loadAllDriversM() {
-  let query = db.from('drivers').select('id, name, phone, vehicle_type, vehicle_number, is_approved, is_online, today_earnings, withdrawable_amount, insurance_status, created_at').not('name', 'is', null).order('created_at', { ascending: false }).limit(100);
+  let query = db.from('drivers').select('id, name, phone, vehicle_type, vehicle_number, is_approved, is_online, today_earnings, withdrawable_amount, insurance_status, service_area, created_at').not('name', 'is', null).order('created_at', { ascending: false }).limit(100);
   const phoneSearch = document.getElementById('m-driver-phone-search')?.value.trim();
   if (phoneSearch) query = query.ilike('phone', `%${phoneSearch}%`);
   const { data } = await query;
@@ -817,6 +817,12 @@ async function loadAllDriversM() {
       <div class="li-title">🛵 ${d.name || '(이름 없음)'} · ${d.phone}</div>
       <div class="li-sub">${vehicleLabel(d.vehicle_type)} · ${d.vehicle_number || '-'} · ${d.is_approved ? '<span class="badge green">승인</span>' : '<span class="badge orange">대기</span>'} · ${d.is_online ? '<span class="badge green">온라인</span>' : '<span class="badge gray">오프라인</span>'}${insuranceBadgeM(d.insurance_status) ? ' · ' + insuranceBadgeM(d.insurance_status) : ''}</div>
       <div class="li-sub">오늘수익 ${(earnMap[d.id]||0).toLocaleString()}원 · 출금가능 ${(d.withdrawable_amount||0).toLocaleString()}원</div>
+      <div class="li-sub" style="display:flex;gap:6px;align-items:center;margin-top:6px;">
+        <span style="flex-shrink:0;">선호지역</span>
+        <select id="sa-${d.id}" style="flex:1;min-width:0;padding:6px 8px;border-radius:6px;">${serviceAreaOptionsM(d.service_area)}</select>
+        <button class="btn btn-ghost" style="flex-shrink:0;" onclick="saveDriverServiceAreaM('${d.id}',this)">저장</button>
+      </div>
+      <div class="li-sub" id="sa-note-${d.id}" style="font-size:11px;">${serviceAreaNoteM(d.service_area)}</div>
       <div class="li-actions">
         <button class="btn btn-red" onclick="blockDriverM('${d.id}','${esc(d.name||'')}',this)">🚫 차단</button>
       </div>
@@ -835,6 +841,54 @@ async function blockDriverM(id, name, btn) {
     document.getElementById('dc-' + id)?.remove();
     alert(result.alreadyBlocked ? '이미 차단된 기사입니다' : '차단 처리 완료');
   } catch(e) { btn.disabled = false; btn.textContent = '🚫 차단'; alert('처리 실패: ' + e.message); }
+}
+
+// ── 기사 선호지역(service_area) 수정 ─────────────────────────────────────
+// 기사앱에 수정 UI가 없어 어드민이 대신 고친다. 웹 어드민(admin.html)과 동일 동작.
+// ★목록은 기사앱 DriverRegistrationScreen의 SEOUL_DISTRICTS/OTHER_REGIONS와 반드시 동일.
+//   dispatch가 .eq('service_area', order.pickup_gu)로 정확일치 필터링하므로(dispatch:227)
+//   값이 어긋나면 그 기사는 지역 라운드 배차에서 제외된다.
+// 저장은 drivers 직접 update가 아니라 admin-action(service_role)을 경유한다(기존 패턴 유지).
+const SEOUL_DISTRICTS_ADMIN = ['강남구','강동구','강북구','강서구','관악구','광진구','구로구','금천구','노원구','도봉구','동대문구','동작구','마포구','서대문구','서초구','성동구','성북구','송파구','양천구','영등포구','용산구','은평구','종로구','중구','중랑구'];
+const OTHER_REGIONS_ADMIN = ['경기도','부산','대구','인천','광주','대전','울산','세종','강원도','충청북도','충청남도','전라북도','전라남도','경상북도','경상남도','제주도'];
+
+function serviceAreaOptionsM(current) {
+  const cur = current || '';
+  let html = `<option value=""${cur === '' ? ' selected' : ''}>미설정</option>`;
+  html += '<optgroup label="서울">';
+  for (const dist of SEOUL_DISTRICTS_ADMIN) html += `<option value="${esc(dist)}"${cur === dist ? ' selected' : ''}>${esc(dist)}</option>`;
+  html += '</optgroup><optgroup label="서울 외 (지역배차 제외)">';
+  for (const r of OTHER_REGIONS_ADMIN) html += `<option value="${esc(r)}"${cur === r ? ' selected' : ''}>${esc(r)}</option>`;
+  html += '</optgroup>';
+  // 목록에 없는 기존 저장값(과거 데이터)도 유실 없이 노출한다.
+  if (cur && !SEOUL_DISTRICTS_ADMIN.includes(cur) && !OTHER_REGIONS_ADMIN.includes(cur)) {
+    html += `<optgroup label="현재값 (목록 외)"><option value="${esc(cur)}" selected>${esc(cur)}</option></optgroup>`;
+  }
+  return html;
+}
+
+function serviceAreaNoteM(v) {
+  if (!v) return '⚠️ 미설정 — 지역 라운드 배차 제외(반경 배차만)';
+  if (SEOUL_DISTRICTS_ADMIN.includes(v)) return '✅ 픽업지 구와 일치 시 지역 라운드 배차 대상';
+  return '⚠️ 서울 외 지역 — 지역 라운드 배차 제외(반경 배차만)';
+}
+
+async function saveDriverServiceAreaM(id, btn) {
+  const sel = document.getElementById('sa-' + id);
+  if (!sel) return;
+  const value = sel.value;
+  const prev = btn.textContent;
+  btn.disabled = true; btn.textContent = '저장 중...';
+  try {
+    const result = await callAdminAction('updateDriverServiceArea', { driverId: id, serviceArea: value });
+    const noteEl = document.getElementById('sa-note-' + id);
+    if (noteEl) noteEl.textContent = serviceAreaNoteM(result.serviceArea || '');
+    alert('선호 지역 저장 완료: ' + (result.serviceArea || '미설정'));
+  } catch(e) {
+    alert('선호 지역 저장 실패: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = prev;
+  }
 }
 // 승인: is_approved 직접 UPDATE → admin-action 이관. CAS(is_approved가 true가 아닐 때만)로 중복 승인 차단.
 // 이미 승인된 건이면 승인 SMS를 재발송하지 않는다.
