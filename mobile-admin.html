@@ -722,13 +722,7 @@ async function irCallAccept(cutoff) {
   try {
     dispatched = await irCount(()=>{ let q=db.from('dispatch_events').select('*',{count:'exact',head:true}).eq('event_type','dispatched'); if(cutoff) q=q.gte('created_at',cutoff); return q; });
     accepted   = await irCount(()=>{ let q=db.from('dispatch_events').select('*',{count:'exact',head:true}).eq('event_type','accepted');   if(cutoff) q=q.gte('created_at',cutoff); return q; });
-  } catch(e) {
-    // [임시 진단] 에러 원인 전체 노출(RLS 42501 등 식별용). 원인 확정 후 원복 예정.
-    console.error('[IR 콜수락률] dispatch_events 에러 원본:', e);
-    let dbg; try { dbg = JSON.stringify(e, Object.getOwnPropertyNames(e||{})); } catch(_) { dbg = String(e); }
-    const parts = []; if(e){ if(e.message)parts.push('message='+e.message); if(e.code)parts.push('code='+e.code); if(e.details)parts.push('details='+e.details); if(e.hint)parts.push('hint='+e.hint); }
-    return `<span style="color:var(--red);font-size:11px;">dispatch_events 집계 불가<br>${parts.join(' · ')}<br><span style="color:var(--text3);word-break:break-all;">${dbg}</span></span>`;
-  }
+  } catch(e) { return `<span style="color:var(--text3);font-size:11px;">dispatch_events 집계 불가 (${e.message || e.code || '조회 실패'})</span>`; }
   if(!dispatched) return `<span style="color:var(--text3);font-size:11px;">데이터 없음 / 집계 대기 (로그 시작 ${logStart})</span>`;
   return `${irBig(irPct(accepted,dispatched))}<div style="font-size:11px;color:var(--text2);margin-top:4px;">수락 ${accepted} / 발송 ${dispatched}</div><div style="font-size:10px;color:var(--text3);margin-top:4px;">dispatch_events 로그 시작: <b>${logStart}</b></div>`;
 }
