@@ -979,17 +979,55 @@ function driverDocImgFailed(el, label) {
   if (el && el.parentNode) el.outerHTML = driverDocFailBox(label);
 }
 
+// 새 탭에 안내문을 출력한다. about:blank는 opener와 동일 출처라 document 접근이 가능하다.
+function driverDocTabWrite(w, text, sub, isError) {
+  if (!w) return;
+  try {
+    w.document.open();
+    w.document.write(
+      '<!doctype html><html lang="ko"><head><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+      '<title>' + text + '</title></head>' +
+      '<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;' +
+      'background:#1a1a1a;color:' + (isError ? '#ff6b5a' : '#eaeaea') + ';text-align:center;' +
+      'font-family:system-ui,-apple-system,sans-serif;">' +
+      '<div><div style="font-size:16px;font-weight:600;">' + text + '</div>' +
+      '<div style="margin-top:8px;font-size:13px;color:#8a8a8a;">' + sub + '</div></div>' +
+      '</body></html>'
+    );
+    w.document.close();
+  } catch (e) {}
+}
+
+// 닫기가 막히는 환경(모바일에서 흔함)에서 빈 탭이 방치되지 않게 안내문으로 대체한다.
+function driverDocCloseOrWarn(w, label) {
+  if (!w) return;
+  try { w.close(); } catch (e) {}
+  let stillOpen;
+  try { stillOpen = !w.closed; } catch (e) { stillOpen = false; }
+  if (stillOpen) driverDocTabWrite(w, '문서를 불러오지 못했습니다', label + ' — 이 창을 닫고 다시 시도해주세요', true);
+}
+
 // 클릭 시점 재발급. 팝업 차단을 피하려 창을 먼저 열고 URL을 나중에 넣는다.
+// ★ 'about:blank'를 반드시 명시할 것. 빈 문자열('')은 about:blank가 아니라 현재 문서 URL로
+//   해석되어, 서명 URL을 기다리는 동안 어드민 도메인에 404 요청이 나간다
+//   (네트워크가 느린 모바일에서는 GitHub Pages 404가 먼저 렌더링된다).
 async function openDriverDoc(id, type) {
   const label = driverDocLabel(type);
-  const w = window.open('', '_blank');
-  const url = await driverDocSignedUrl(driverDocStore.get(id + ':' + type));
-  if (!url) {
-    if (w) w.close();
+  const w = window.open('about:blank', '_blank');
+  driverDocTabWrite(w, label + ' 불러오는 중...', '잠시만 기다려주세요', false);
+  try {
+    const url = await driverDocSignedUrl(driverDocStore.get(id + ':' + type));
+    if (!url) {
+      driverDocCloseOrWarn(w, label);
+      alert(label + ' 로드 실패 — 잠시 후 다시 시도해주세요.');
+      return;
+    }
+    if (w) w.location.href = url; else window.open(url, '_blank');
+  } catch (e) {
+    driverDocCloseOrWarn(w, label);
     alert(label + ' 로드 실패 — 잠시 후 다시 시도해주세요.');
-    return;
   }
-  if (w) w.location.href = url; else window.open(url, '_blank');
 }
 
 /* ===== Drivers ===== */
