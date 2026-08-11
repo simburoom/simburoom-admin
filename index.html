@@ -956,6 +956,15 @@ tbody tr:last-child td { border-bottom: none; }
         <button class="btn btn-primary" onclick="saveMaxOrderDistance()">💾 저장</button>
       </div>
       <div class="card">
+        <div class="card-title">도보 최대거리 설정</div>
+        <div class="setting-info" style="margin-bottom:10px;"><div class="s-title">도보 기사에게 콜을 보낼 최대 배송거리 (미터)</div><div class="s-desc">보내는 곳 ↔ 받는 곳 거리가 이 값을 넘으면 도보 기사(🚶)에게는 콜과 푸시가 가지 않습니다. 다른 이동수단은 영향받지 않아요. 비워두면 기본값 3000m가 적용됩니다.</div></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          <input type="number" id="walk-max-distance" class="form-input" style="width:120px;" placeholder="3000">
+          <span style="color:var(--text3);font-size:11px;">m</span>
+        </div>
+        <button class="btn btn-primary" onclick="saveWalkMaxDistance()">💾 저장</button>
+      </div>
+      <div class="card">
         <div class="card-title">사업자 정보</div>
         <div style="display:flex;flex-direction:column;gap:8px;">
           <div style="display:flex;justify-content:space-between;"><span style="font-size:10px;color:var(--text3);">상호</span><span style="font-size:11px;color:var(--text);">심부름</span></div>
@@ -1173,7 +1182,7 @@ function showSection(id, el) {
   else if (id === 'map') loadMap();
   else if (id === 'service_area') loadServiceAreas();
   else if (id === 'master') loadMasterSection();
-  else if (id === 'config') { loadPeakSchedule(); loadDispatchRadii(); loadMaxOrderDistance(); }
+  else if (id === 'config') { loadPeakSchedule(); loadDispatchRadii(); loadMaxOrderDistance(); loadWalkMaxDistance(); }
 }
 
 function refreshCurrentSection() {
@@ -1891,7 +1900,7 @@ async function loadOrders() {
   tbody.innerHTML = data.map(o => `
     <tr>
       <td style="color:var(--primary);font-weight:600;font-size:10px;font-family:monospace;">${o.id.substring(0,8)}...</td>
-      <td>${statusBadge[o.status] || o.status}${o.status === 'delivering' ? ` <button class="btn btn-danger" style="margin-left:6px;padding:2px 8px;font-size:10px;" onclick="forceCloseDelivery('${o.id}',this)">강제 종결</button>` : ''}</td>
+      <td>${statusBadge[o.status] || o.status}${orderActionButtons(o)}</td>
       <td>${o.pickup_dong || '-'}</td>
       <td>${o.delivery_dong || '-'}</td>
       <td style="color:var(--text3);">${o.distance_km ? o.distance_km.toFixed(1)+'km' : '-'}</td>
@@ -1899,6 +1908,69 @@ async function loadOrders() {
       <td style="font-size:10px;color:var(--text3);">${o.driver_id ? o.driver_id.substring(0,8)+'...' : '-'}</td>
       <td style="font-size:10px;color:var(--text3);">${new Date(o.created_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
     </tr>`).join('');
+}
+
+// 주문 행의 액션 버튼.
+// 기사 배송 포기(강제취소/재배차)는 accepted·picking_up·delivering 전 구간이 대상이다.
+// 기존 [강제 종결]은 delivering 전용이라 유지한다 — 기사와 연락이 끊긴 좌초 건 회수용이고,
+// 배송 포기(기사가 연락해 온 건)와 처리 성격이 다르다.
+const ABANDONABLE_STATUSES = ['accepted', 'picking_up', 'delivering'];
+function orderActionButtons(o) {
+  let html = '';
+  if (ABANDONABLE_STATUSES.includes(o.status)) {
+    html += ` <button class="btn btn-danger" style="margin-left:6px;padding:2px 8px;font-size:10px;" onclick="driverAbandonOrder('${o.id}','cancel',this)">강제취소</button>`;
+    html += ` <button class="btn btn-ghost" style="margin-left:4px;padding:2px 8px;font-size:10px;" onclick="driverAbandonOrder('${o.id}','redispatch',this)">재배차</button>`;
+  }
+  if (o.status === 'delivering') {
+    html += ` <button class="btn btn-danger" style="margin-left:4px;padding:2px 8px;font-size:10px;" onclick="forceCloseDelivery('${o.id}',this)">강제 종결</button>`;
+  }
+  return html;
+}
+
+// ===== 기사 배송 포기 처리 (강제취소 / 재배차) =====
+// 기사가 "배송 못하겠다"고 연락해 온 건. 기사 귀책이므로 취소 수수료 0·기사 보상 0이다.
+// 상태 전이·배정 해제·보증금·알림·dispatch 재invoke를 전부 admin-action이 CAS로 원자 처리한다.
+// ★CAS 0행(=대상 상태 아님)은 HTTP 200 + { success:false }로 오므로 본문에서 판정한다.
+async function driverAbandonOrder(orderId, mode, btn) {
+  const shortId = String(orderId).substring(0, 8);
+  const msg = mode === 'cancel'
+    ? `주문 ${shortId} 을(를) 기사 귀책으로 강제 취소합니다.\n\n`
+      + `· 유저에게 배송비가 전액 환불됩니다 (취소 수수료 0원).\n`
+      + `· 기사에게는 보상이 지급되지 않습니다.\n`
+      + `· 해당 기사는 이 주문에서 배정 해제됩니다.\n\n`
+      + `되돌릴 수 없습니다.`
+    : `주문 ${shortId} 을(를) 다른 기사에게 재배차합니다.\n\n`
+      + `· 현재 기사를 배정 해제하고 다시 기사를 찾습니다.\n`
+      + `· 유저 결제 금액은 그대로 유지됩니다 (추가 결제·환불 없음).\n`
+      + `· 포기한 기사에게는 이 주문의 콜이 다시 가지 않습니다.\n\n`
+      + `진행할까요?`;
+  if (!confirm(msg)) return;
+  const reason = prompt('사유를 입력해주세요 (선택, 기록용)', mode === 'cancel' ? '기사 배송 포기' : '기사 배송 포기 - 재배차') || null;
+  btn.disabled = true;
+  try {
+    const res = await callAdminAction('driverAbandonOrder', { orderId, mode, reason });
+    if (res.success === false) {
+      alert(`처리 실패 (${res.reason || '알 수 없음'})\n배정·배송 중인 주문이 아닙니다. 현재 상태: ${res.status || '알 수 없음'}`);
+      btn.disabled = false;
+      return;
+    }
+    if (mode === 'cancel') {
+      if (res.depositError) {
+        alert(`강제취소 완료 — 단, 보증금 복원 실패. 수동 확인이 필요합니다.\n주문 ${shortId} / 사유: ${res.depositError}`);
+      } else {
+        alert(`강제취소 완료! 주문 ${shortId}\n유저에게 배송비가 전액 환불됐어요. (수수료 0원)`);
+      }
+    } else {
+      alert(res.dispatchStarted
+        ? `재배차를 시작했어요! 주문 ${shortId}\n다시 기사를 찾는 중입니다. 잠시 후 목록을 새로고침해 확인해주세요.`
+        : `배정은 해제됐지만 재배차 호출에 실패했어요. 주문 ${shortId}\n주문은 '매칭중' 상태이니 잠시 후 다시 시도하거나 개발팀에 문의해주세요.`);
+    }
+    if (typeof loadOrders === 'function') loadOrders();
+    if (typeof loadDeliveringOrders === 'function') loadDeliveringOrders();
+  } catch (e) {
+    alert('처리 실패: ' + e.message);
+    btn.disabled = false;
+  }
 }
 
 // ===== 배송 강제 종결 =====
@@ -2885,9 +2957,21 @@ async function loadNotices() {
     </div>`).join('');
 }
 
+// ★공지는 notices(공지사항 화면용)와 notifications(알림 화면용) 두 테이블에 각각 저장된다.
+//   유저앱의 '알림'은 notices가 아니라 notifications를 읽으므로, notices만 지우면
+//   알림 목록에는 지운 공지가 그대로 남는다(옛 공지·테스트 공지가 계속 뜨던 원인).
+//   → 짝이 되는 notifications 행(notice_id로 연결)을 반드시 함께 지운다.
+//   ※notifications를 먼저 지운다 — 실패해도 notices가 남아 재시도가 가능하다.
+//     (반대로 하면 notices만 사라져 짝을 찾을 단서가 없어진다)
 async function deleteNotice(id) {
-  if (!confirm('공지를 삭제할까요?')) return;
-  await db.from('notices').delete().eq('id', id);
+  if (!confirm('공지를 삭제할까요?\n\n공지사항과 알림 양쪽에서 모두 삭제됩니다.')) return;
+  const { error: notifErr } = await db.from('notifications').delete().eq('notice_id', id);
+  if (notifErr) {
+    alert('알림 삭제 실패: ' + notifErr.message + '\n\n공지는 삭제하지 않았습니다. 다시 시도해주세요.');
+    return;
+  }
+  const { error: noticeErr } = await db.from('notices').delete().eq('id', id);
+  if (noticeErr) { alert('공지 삭제 실패: ' + noticeErr.message); return; }
   loadNotices();
 }
 
@@ -2899,7 +2983,10 @@ async function saveNotice() {
   const { data: noticeData, error } = await db.from('notices').insert({ title, body, target }).select().single();
   if (error) { alert('저장 실패: ' + error.message); return; }
   if (noticeData) {
+    // ★notice_id로 notices 행과 짝을 지어둔다 — 이게 없으면 나중에 공지를 지울 때
+    //   어떤 알림이 그 공지의 것인지 알 수 없어 알림 목록에 영구히 남는다.
     const { error: notifError } = await db.from('notifications').insert({
+      notice_id: noticeData.id,
       target,
       type: 'notice',
       title,
@@ -3828,6 +3915,39 @@ async function saveMaxOrderDistance() {
   if (error) { alert('저장 실패: ' + error.message); return; }
   alert('주문 최대거리가 저장됐어요! (' + n + 'm)');
   loadMaxOrderDistance();
+}
+
+// ===== 도보 최대거리 (app_config.walk_max_distance, 단위 m) =====
+// dispatch가 이 값을 읽어, 픽업↔배송 거리가 초과하면 vehicle_type='walk' 기사를
+// 콜카드 대상과 R2 지역 푸시 대상 양쪽에서 제외한다. 미설정 시 dispatch 기본값 3000m.
+async function loadWalkMaxDistance() {
+  const { data } = await db.from('app_config').select('value').eq('key', 'walk_max_distance').maybeSingle();
+  const input = document.getElementById('walk-max-distance');
+  if (!input) return;
+  let val = '';
+  if (data?.value != null && String(data.value).trim() !== '') {
+    const n = parseInt(String(data.value).trim(), 10);
+    if (Number.isFinite(n) && n > 0) val = String(n);
+  }
+  input.value = val;
+}
+
+async function saveWalkMaxDistance() {
+  const raw = (document.getElementById('walk-max-distance').value || '').trim();
+  // 비워두면 행을 삭제 → dispatch가 기본값(3000m)을 사용
+  if (raw === '') {
+    const { error } = await db.from('app_config').delete().eq('key', 'walk_max_distance');
+    if (error) { alert('저장 실패: ' + error.message); return; }
+    alert('도보 최대거리를 비웠어요. 이제 기본값 3000m가 적용됩니다.');
+    loadWalkMaxDistance();
+    return;
+  }
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) { alert('0보다 큰 숫자를 입력하거나, 비워두세요.'); return; }
+  const { error } = await db.from('app_config').upsert({ key: 'walk_max_distance', value: String(n), updated_at: new Date().toISOString() });
+  if (error) { alert('저장 실패: ' + error.message); return; }
+  alert('도보 최대거리가 저장됐어요! (' + n + 'm)');
+  loadWalkMaxDistance();
 }
 
 // ===== 인증 =====
