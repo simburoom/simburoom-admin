@@ -22,8 +22,21 @@
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Noto Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; }
-.sidebar { width: var(--sidebar); background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; }
-.sidebar-logo { padding: 20px 18px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+.sidebar { width: var(--sidebar); background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; overflow: hidden; }
+.sidebar-logo { padding: 20px 18px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+/* 메뉴 리스트만 스크롤. 로고(위)·프로필(아래)은 고정된다.
+   ★min-height:0 이 핵심 — flex 아이템의 기본값 min-height:auto는 콘텐츠보다 작게 줄어들지
+   않게 막아서, 이게 없으면 overflow-y:auto를 줘도 스크롤이 생기지 않고 그대로 잘린다.
+   .sidebar가 position:fixed + top/bottom:0 이라 높이는 뷰포트에 고정돼 있고,
+   넘치는 부분을 페이지 스크롤로 볼 수 없었던 것이 이 버그의 원인이다. */
+.sidebar-nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+/* 다크 테마용 얇은 스크롤바 (Firefox) */
+.sidebar-nav { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+/* 다크 테마용 얇은 스크롤바 (Chrome·Safari·Edge) */
+.sidebar-nav::-webkit-scrollbar { width: 6px; }
+.sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+.sidebar-nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.sidebar-nav::-webkit-scrollbar-thumb:hover { background: var(--text3); }
 .logo-mark { width: 32px; height: 32px; background: var(--primary); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
 .logo-text { font-size: 14px; font-weight: 700; color: var(--text); }
 .logo-sub { font-size: 9px; color: var(--text3); margin-top: 1px; }
@@ -34,7 +47,7 @@ body { font-family: 'Noto Sans KR', sans-serif; background: var(--bg); color: va
 .nav-item .icon { font-size: 14px; width: 18px; text-align: center; }
 .nav-badge { margin-left: auto; background: var(--red); color: #fff; font-size: 8px; font-weight: 700; padding: 1px 5px; border-radius: 100px; min-width: 16px; text-align: center; }
 .nav-badge.orange { background: var(--orange); }
-.sidebar-footer { margin-top: auto; padding: 14px 18px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.sidebar-footer { margin-top: auto; padding: 14px 18px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .admin-avatar { width: 28px; height: 28px; background: var(--primary-dim); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; }
 .admin-name { font-size: 11px; font-weight: 600; color: var(--text); }
 .admin-role { font-size: 9px; color: var(--text3); }
@@ -162,31 +175,33 @@ tbody tr:last-child td { border-bottom: none; }
       <div class="logo-sub">관리자 콘솔</div>
     </div>
   </div>
-  <div class="nav-section">메인</div>
-  <div class="nav-item active" onclick="showSection('dashboard', this)"><span class="icon">📊</span> 대시보드</div>
-  <div class="nav-section">운영</div>
-  <div class="nav-item" onclick="showSection('orders', this)"><span class="icon">📦</span> 주문 관리</div>
-  <div class="nav-item" onclick="showSection('pickup_fail', this)"><span class="icon">⚠️</span> 픽업 불가 신고 <span class="nav-badge orange" id="pickup-fail-badge">0</span></div>
-  <div class="nav-item" onclick="showSection('map', this)"><span class="icon">🗺️</span> 실시간 위치</div>
-  <div class="nav-section">회원·파트너</div>
-  <div class="nav-item" onclick="showSection('users', this)"><span class="icon">👤</span> 유저 관리</div>
-  <div class="nav-item" onclick="showSection('drivers', this)"><span class="icon">🛵</span> 기사 관리</div>
-  <div class="nav-item" onclick="showSection('agents', this)"><span class="icon">🏢</span> 대리점 관리</div>
-  <div class="nav-section">정산</div>
-  <div class="nav-item" onclick="showSection('settlement', this)"><span class="icon">💰</span> 기사 출금 관리 <span class="nav-badge orange" id="settlement-badge">0</span></div>
-  <div class="nav-item" onclick="showSection('refund', this)"><span class="icon">↩️</span> 환불 관리 <span class="nav-badge orange" id="refund-badge">0</span></div>
-  <div class="nav-section">마케팅·소통</div>
-  <div class="nav-item" onclick="showSection('notice', this)"><span class="icon">📢</span> 공지사항</div>
-  <div class="nav-item" onclick="showSection('push', this)"><span class="icon">🔔</span> 푸시 알림</div>
-  <div class="nav-item" onclick="showSection('coupon', this)"><span class="icon">🎫</span> 쿠폰 관리</div>
-  <div class="nav-section">분석·리포트</div>
-  <div class="nav-item" onclick="showSection('analytics', this)"><span class="icon">📈</span> 운영 분석</div>
-  <div class="nav-item" onclick="showSection('ir', this)"><span class="icon">🚀</span> IR 지표</div>
-  <div class="nav-item" onclick="showSection('etax', this)"><span class="icon">🧾</span> 세무 신고 (E-TAX)</div>
-  <div class="nav-section">설정</div>
-  <div class="nav-item" onclick="showSection('config', this)"><span class="icon">⚙️</span> 운영 설정</div>
-  <div class="nav-item" onclick="showSection('service_area', this)"><span class="icon">🗺️</span> 서비스 지역</div>
-  <div class="nav-item" id="nav-master" style="display:none;" onclick="showSection('master', this)"><span class="icon">🔐</span> 마스터 관리 <span class="nav-badge" id="master-pending-badge" style="display:none;">0</span></div>
+  <div class="sidebar-nav">
+    <div class="nav-section">메인</div>
+    <div class="nav-item active" onclick="showSection('dashboard', this)"><span class="icon">📊</span> 대시보드</div>
+    <div class="nav-section">운영</div>
+    <div class="nav-item" onclick="showSection('orders', this)"><span class="icon">📦</span> 주문 관리</div>
+    <div class="nav-item" onclick="showSection('pickup_fail', this)"><span class="icon">⚠️</span> 픽업 불가 신고 <span class="nav-badge orange" id="pickup-fail-badge">0</span></div>
+    <div class="nav-item" onclick="showSection('map', this)"><span class="icon">🗺️</span> 실시간 위치</div>
+    <div class="nav-section">회원·파트너</div>
+    <div class="nav-item" onclick="showSection('users', this)"><span class="icon">👤</span> 유저 관리</div>
+    <div class="nav-item" onclick="showSection('drivers', this)"><span class="icon">🛵</span> 기사 관리</div>
+    <div class="nav-item" onclick="showSection('agents', this)"><span class="icon">🏢</span> 대리점 관리</div>
+    <div class="nav-section">정산</div>
+    <div class="nav-item" onclick="showSection('settlement', this)"><span class="icon">💰</span> 기사 출금 관리 <span class="nav-badge orange" id="settlement-badge">0</span></div>
+    <div class="nav-item" onclick="showSection('refund', this)"><span class="icon">↩️</span> 환불 관리 <span class="nav-badge orange" id="refund-badge">0</span></div>
+    <div class="nav-section">마케팅·소통</div>
+    <div class="nav-item" onclick="showSection('notice', this)"><span class="icon">📢</span> 공지사항</div>
+    <div class="nav-item" onclick="showSection('push', this)"><span class="icon">🔔</span> 푸시 알림</div>
+    <div class="nav-item" onclick="showSection('coupon', this)"><span class="icon">🎫</span> 쿠폰 관리</div>
+    <div class="nav-section">분석·리포트</div>
+    <div class="nav-item" onclick="showSection('analytics', this)"><span class="icon">📈</span> 운영 분석</div>
+    <div class="nav-item" onclick="showSection('ir', this)"><span class="icon">🚀</span> IR 지표</div>
+    <div class="nav-item" onclick="showSection('etax', this)"><span class="icon">🧾</span> 세무 신고 (E-TAX)</div>
+    <div class="nav-section">설정</div>
+    <div class="nav-item" onclick="showSection('config', this)"><span class="icon">⚙️</span> 운영 설정</div>
+    <div class="nav-item" onclick="showSection('service_area', this)"><span class="icon">🗺️</span> 서비스 지역</div>
+    <div class="nav-item" id="nav-master" style="display:none;" onclick="showSection('master', this)"><span class="icon">🔐</span> 마스터 관리 <span class="nav-badge" id="master-pending-badge" style="display:none;">0</span></div>
+  </div>
   <div class="sidebar-footer">
     <div class="admin-avatar">👑</div>
     <div style="flex:1;min-width:0;"><div class="admin-name" id="sidebar-admin-name">관리자</div><div class="admin-role" id="sidebar-admin-role">로딩 중...</div></div>
