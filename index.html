@@ -284,6 +284,7 @@ tbody tr:last-child td { border-bottom: none; }
   <div id="orders" class="section">
     <div class="section-header">
       <div><div class="section-header-title">주문 관리</div><div class="section-header-sub">전체 배송 주문 조회</div></div>
+      <span id="orders-realtime-badge" style="font-size:10px;color:var(--text3);margin-right:8px;">⚪ 수동</span>
       <button class="btn btn-ghost" onclick="loadOrders()">🔄 새로고침</button>
     </div>
     <div class="filter-bar">
@@ -1179,6 +1180,9 @@ function showSection(id, el) {
   document.getElementById(id).classList.add('active');
   if (el) el.classList.add('active');
   currentSection = id;
+  // 주문 관련 섹션에서만 orders 구독을 유지한다(다른 섹션에선 해제).
+  if (id === 'orders' || id === 'pickup_fail') startOrdersRealtime();
+  else stopOrdersRealtime();
   const titles = { dashboard:'대시보드', orders:'주문 관리', pickup_fail:'픽업 불가 신고', users:'유저 관리', drivers:'기사 관리', settlement:'기사 출금 관리', refund:'환불 관리', push:'푸시 알림', notice:'공지사항', coupon:'쿠폰 관리', analytics:'운영 분석', ir:'IR 지표 (투자 트랙션)', etax:'세무 신고 (E-TAX)', config:'운영 설정', service_area:'서비스 지역', map:'실시간 위치', agents:'대리점 관리', master:'마스터 관리' };
   document.getElementById('topbar-title').textContent = titles[id] || id;
   if (id === 'dashboard') loadDashboard();
@@ -1198,6 +1202,53 @@ function showSection(id, el) {
   else if (id === 'service_area') loadServiceAreas();
   else if (id === 'master') loadMasterSection();
   else if (id === 'config') { loadPeakSchedule(); loadDispatchRadii(); loadMaxOrderDistance(); loadWalkMaxDistance(); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 주문 실시간 반영 (orders 테이블 구독)
+//
+//   기존에는 섹션 진입 시 1회만 조회해, 열어둔 채 있으면 화면이 낡은 스냅샷으로 굳었다.
+//   기사가 전화로 "배송 못하겠다"고 하는 동안 상태가 바뀌면, 낡은 목록의 버튼을 눌러
+//   "처리 실패 (not_abandonable)"만 보게 된다(서버 CAS가 막아 돈은 안전하지만 혼란).
+//
+//   ★디바운스 필수 — dispatch가 배차 90초 동안 dispatched_driver_ids 등을 1초 간격으로
+//     갱신하므로 이벤트가 폭주한다. 합쳐서 최대 REALTIME_DEBOUNCE_MS에 1회만 재조회한다.
+//   ★주문 관련 섹션에 있을 때만 구독한다(다른 섹션에선 해제 → 불필요한 트래픽·재조회 방지).
+// ═══════════════════════════════════════════════════════════════════════════
+const REALTIME_DEBOUNCE_MS = 3000;
+let ordersChannel = null;
+let ordersReloadTimer = null;
+
+function setRealtimeBadge(on) {
+  const el = document.getElementById('orders-realtime-badge');
+  if (!el) return;
+  el.textContent = on ? '🟢 실시간' : '⚪ 수동';
+  el.title = on ? '주문 변경이 자동으로 반영돼요' : '실시간 연결이 끊겼어요. 새로고침을 눌러주세요.';
+}
+
+function scheduleOrdersReload() {
+  if (ordersReloadTimer) return;   // 이미 예약돼 있으면 합친다
+  ordersReloadTimer = setTimeout(() => {
+    ordersReloadTimer = null;
+    if (currentSection === 'orders') loadOrders();
+    else if (currentSection === 'pickup_fail') loadPickupFails();
+  }, REALTIME_DEBOUNCE_MS);
+}
+
+function startOrdersRealtime() {
+  if (ordersChannel) return;   // 중복 구독 방지
+  ordersChannel = db
+    .channel('admin-orders')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, scheduleOrdersReload)
+    .subscribe((status) => setRealtimeBadge(status === 'SUBSCRIBED'));
+}
+
+function stopOrdersRealtime() {
+  if (ordersReloadTimer) { clearTimeout(ordersReloadTimer); ordersReloadTimer = null; }
+  if (!ordersChannel) return;
+  db.removeChannel(ordersChannel);
+  ordersChannel = null;
+  setRealtimeBadge(false);
 }
 
 function refreshCurrentSection() {
@@ -4023,6 +4074,7 @@ function applySession(session) {
 
 async function logout() {
   if (!confirm('로그아웃 하시겠습니까?')) return;
+  stopOrdersRealtime();   // 세션 종료 전 구독 정리(끊긴 소켓이 남아 재로그인 시 중복 구독되는 것 방지)
   clearStoredSession();
   // signOut이 SIGNED_OUT을 발생시켜 핸들러가 clearStoredSession + returnToLogin을 다시 수행한다(멱등).
   await setDbAuth(null);
