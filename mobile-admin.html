@@ -180,7 +180,11 @@
 
       <!-- ORDERS (pickup fail) -->
       <div id="view-orders" class="view">
-        <div class="section-title">배송중 주문</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
+          <span id="orders-realtime-badge" style="font-size:10px;color:var(--text3);">⚪ 수동</span>
+          <button class="btn btn-ghost" onclick="reloadOrdersViewM()">🔄 새로고침</button>
+        </div>
+        <div class="section-title" style="margin-top:0;">진행중 주문</div>
         <div id="delivering-list"><div class="empty">로딩 중...</div></div>
         <div class="section-title">픽업 불가 신고</div>
         <div id="pickupfail-list"><div class="empty">로딩 중...</div></div>
@@ -569,6 +573,7 @@ function applySession(session) {
 }
 async function logout() {
   if (!confirm('로그아웃 하시겠습니까?')) return;
+  stopOrdersRealtimeM();   // 세션 종료 전 구독 정리(재로그인 시 중복 구독 방지)
   clearStoredSession();
   // signOut이 SIGNED_OUT을 발생시켜 핸들러가 clearStoredSession + returnToLogin을 다시 수행한다(멱등).
   await setDbAuth(null);
@@ -582,17 +587,68 @@ function setView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + id).classList.add('active');
 }
+// ═══════════════════════════════════════════════════════════════════════════
+// 주문 실시간 반영 (orders 테이블 구독) — admin.html과 동일 규칙. 한쪽만 고치지 말 것.
+//
+//   기존에는 주문 탭 진입 시 1회만 조회해, 탭을 열어둔 채 있으면 화면이 낡은 스냅샷으로 굳었다.
+//   ★디바운스 필수 — dispatch가 배차 90초 동안 orders를 1초 간격으로 갱신하므로 이벤트가 폭주한다.
+//   ★주문 탭에 있을 때만 구독한다(다른 탭·서브뷰로 나가면 해제).
+// ═══════════════════════════════════════════════════════════════════════════
+const REALTIME_DEBOUNCE_MS = 3000;
+let ordersChannelM = null;
+let ordersReloadTimerM = null;
+
+function reloadOrdersViewM() {
+  loadDeliveringOrders();
+  loadPickupFails();
+}
+
+function setRealtimeBadgeM(on) {
+  const el = document.getElementById('orders-realtime-badge');
+  if (!el) return;
+  el.textContent = on ? '🟢 실시간' : '⚪ 수동';
+}
+
+function scheduleOrdersReloadM() {
+  if (ordersReloadTimerM) return;   // 이미 예약돼 있으면 합친다
+  ordersReloadTimerM = setTimeout(() => {
+    ordersReloadTimerM = null;
+    reloadOrdersViewM();
+  }, REALTIME_DEBOUNCE_MS);
+}
+
+function startOrdersRealtimeM() {
+  if (ordersChannelM) return;   // 중복 구독 방지
+  ordersChannelM = db
+    .channel('mobile-admin-orders')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, scheduleOrdersReloadM)
+    .subscribe((status) => setRealtimeBadgeM(status === 'SUBSCRIBED'));
+}
+
+function stopOrdersRealtimeM() {
+  if (ordersReloadTimerM) { clearTimeout(ordersReloadTimerM); ordersReloadTimerM = null; }
+  if (!ordersChannelM) return;
+  db.removeChannel(ordersChannelM);
+  ordersChannelM = null;
+  setRealtimeBadgeM(false);
+}
+
 function showTab(tab) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('tab-' + tab).classList.add('active');
   setView(tab);
   document.getElementById('topbar-title').textContent = TAB_TITLES[tab];
+  // 주문 탭에서만 orders 구독을 유지한다(다른 탭에선 해제).
+  if (tab === 'orders') startOrdersRealtimeM();
+  else stopOrdersRealtimeM();
   if (tab === 'home') loadDashboard();
   else if (tab === 'drivers') switchDriverTabM('pending');
-  else if (tab === 'orders') { loadDeliveringOrders(); loadPickupFails(); }
+  else if (tab === 'orders') reloadOrdersViewM();
   else if (tab === 'area') loadServiceAreas();
 }
 function openSub(id) {
+  // 서브뷰(대리점·쿠폰·공지·설정 등)로 나가면 주문 탭을 벗어난 것이므로 구독 해제.
+  stopOrdersRealtimeM();
   setView(id);
   document.getElementById('topbar-title').textContent = SUB_TITLES[id];
   if (id === 'agents') loadAgents();
