@@ -327,7 +327,7 @@ tbody tr:last-child td { border-bottom: none; }
   <!-- ===== 유저 관리 ===== -->
   <div id="users" class="section">
     <div class="section-header">
-      <div><div class="section-header-title">유저 관리</div><div class="section-header-sub">가입 유저 전체 조회</div></div>
+      <div><div class="section-header-title">유저 관리</div><div class="section-header-sub">가입 유저 전체 조회 <span id="users-count" style="font-weight:700;color:var(--text);"></span></div></div>
       <button class="btn btn-ghost" onclick="refreshUserTab()">🔄 새로고침</button>
     </div>
     <div class="inner-tabs">
@@ -370,7 +370,7 @@ tbody tr:last-child td { border-bottom: none; }
   <!-- ===== 기사 관리 ===== -->
   <div id="drivers" class="section">
     <div class="section-header">
-      <div><div class="section-header-title">기사 관리</div><div class="section-header-sub">기사 심사 및 관리</div></div>
+      <div><div class="section-header-title">기사 관리</div><div class="section-header-sub">기사 심사 및 관리 <span id="drivers-count" style="font-weight:700;color:var(--text);"></span></div></div>
       <button class="btn btn-ghost" onclick="loadAllDrivers();loadPendingDrivers()">🔄 새로고침</button>
     </div>
     <div class="filter-bar">
@@ -1052,8 +1052,28 @@ function vehicleLabel(type) {
   return map[type] || type || '-';
 }
 
-const SUPABASE_URL = 'https://sppvrikqjufrdsrfcokx.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_ymDWJMpm72sXwwcnA3STjQ_mMUCjVjL';
+// ── 환경 분기 ────────────────────────────────────────────────────────────────
+// ★fail-safe 원칙: "확실한 운영 도메인일 때만 운영, 나머지는 전부 스테이징".
+//   file: 로 직접 열기 / hostname 없음 / localhost / 127.0.0.1 / LAN IP(192.168.x.x 등) /
+//   ngrok·미리보기 같은 정체 불명 호스트는 모두 스테이징으로 떨어진다.
+//   → 로컬이나 테스트 환경에서 실수로 열어도 운영 DB에 붙지 않는다.
+//   운영 판정은 simburoom.kr 및 그 하위 도메인(www./admin. 등)으로 한정한다.
+//   쿼리스트링·해시는 판정에서 제외한다(운영 도메인에서 링크 하나로 뒤집히지 않게).
+const PROD_HOST = 'simburoom.kr';
+const IS_STAGING = (function () {
+  if (location.protocol === 'file:') return true;            // 로컬 파일로 직접 열기
+  const h = (location.hostname || '').toLowerCase();
+  if (!h) return true;                                       // hostname 비어 있음
+  if (h.includes('staging') || location.pathname.toLowerCase().includes('staging')) return true;
+  const isProdHost = (h === PROD_HOST || h.endsWith('.' + PROD_HOST));
+  return !isProdHost;                                        // 운영 도메인이 아니면 전부 스테이징
+})();
+const SUPABASE_URL = IS_STAGING
+  ? 'https://asloucseqfoaarnkqoxh.supabase.co'
+  : 'https://sppvrikqjufrdsrfcokx.supabase.co';
+const SUPABASE_ANON_KEY = IS_STAGING
+  ? 'sb_publishable_RNZRzO-_1RleRmjHmFYViQ_uy8CmgT1'
+  : 'sb_publishable_ymDWJMpm72sXwwcnA3STjQ_mMUCjVjL';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
@@ -2193,8 +2213,21 @@ function setUsersPeriod(period) {
   loadUsers();
 }
 
+// 목록 상단 건수 표시. 필터가 걸려 있으면 전체 대비 표시 건수를 함께 보여준다.
+//  total    : 필터 없는 전체 건수
+//  filtered : 현재 필터에 걸린 건수(limit 무시한 실제 매칭 수)
+//  shown    : 화면에 실제 렌더된 행 수(limit에 잘렸을 수 있음)
+function renderListCount(elId, total, filtered, shown) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (total == null) { el.textContent = ''; return; }
+  let t = (filtered === total) ? `총 ${total}명` : `전체 ${total}명 / 표시 ${filtered}명`;
+  if (shown != null && filtered != null && shown < filtered) t += ` (상위 ${shown}건만 표시)`;
+  el.textContent = t;
+}
+
 async function loadUsers() {
-  let query = db.from('users').select('id, phone, charge_balance, point_balance, marketing_agreed, created_at').order('created_at', { ascending: false }).limit(100);
+  let query = db.from('users').select('id, phone, charge_balance, point_balance, marketing_agreed, created_at', { count: 'exact' }).order('created_at', { ascending: false }).limit(100);
   const dateStart = document.getElementById('users-date-start')?.value;
   const dateEnd = document.getElementById('users-date-end')?.value;
   const usersRange = kstDayRange(dateStart, dateEnd);
@@ -2202,7 +2235,10 @@ async function loadUsers() {
   if (usersRange.lte) query = query.lte('created_at', usersRange.lte);
   const phoneSearch = document.getElementById('user-phone-search')?.value.trim();
   if (phoneSearch) query = query.ilike('phone', `%${phoneSearch}%`);
-  const { data } = await query;
+  const { data, count: filteredCount } = await query;
+  // 필터 없는 전체 유저 수(건수만 조회 → head:true라 행 전송 없음)
+  const { count: totalCount } = await db.from('users').select('*', { count: 'exact', head: true });
+  renderListCount('users-count', totalCount, filteredCount ?? (data ? data.length : 0), data ? data.length : 0);
   const tbody = document.getElementById('users-tbody');
   if (!data || data.length === 0) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:24px;">유저 없음</td></tr>'; return; }
   tbody.innerHTML = data.map(u => `
@@ -2248,7 +2284,7 @@ function setDriversPeriod(period) {
 }
 
 async function loadAllDrivers() {
-  let query = db.from('drivers').select('id, name, phone, vehicle_type, vehicle_number, is_approved, is_online, today_earnings, withdrawable_amount, insurance_expires_at, insurance_status, created_at').order('created_at', { ascending: false });
+  let query = db.from('drivers').select('id, name, phone, vehicle_type, vehicle_number, is_approved, is_online, today_earnings, withdrawable_amount, insurance_expires_at, insurance_status, created_at', { count: 'exact' }).order('created_at', { ascending: false });
   const dateStart = document.getElementById('drivers-date-start')?.value;
   const dateEnd = document.getElementById('drivers-date-end')?.value;
   const driversRange = kstDayRange(dateStart, dateEnd);
@@ -2256,7 +2292,10 @@ async function loadAllDrivers() {
   if (driversRange.lte) query = query.lte('created_at', driversRange.lte);
   const driverPhoneSearch = document.getElementById('driver-phone-search')?.value.trim();
   if (driverPhoneSearch) query = query.ilike('phone', `%${driverPhoneSearch}%`);
-  const { data } = await query;
+  const { data, count: filteredCount } = await query;
+  // 필터 없는 전체 기사 수(건수만 조회 → head:true라 행 전송 없음)
+  const { count: totalCount } = await db.from('drivers').select('*', { count: 'exact', head: true });
+  renderListCount('drivers-count', totalCount, filteredCount ?? (data ? data.length : 0), data ? data.length : 0);
   const container = document.getElementById('driver-all');
   if (!data || data.length === 0) { container.innerHTML = '<div style="padding:20px;color:var(--text3);text-align:center;">기사 없음</div>'; return; }
 
