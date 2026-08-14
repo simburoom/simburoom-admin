@@ -175,6 +175,7 @@
             style="width:100%;padding:8px 12px;background:var(--bg2,#1e1e2e);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;box-sizing:border-box;"
             onkeyup="if(event.key==='Enter')loadAllDriversM()">
         </div>
+        <div id="m-drivers-count" style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px;"></div>
         <div id="driver-list"><div class="empty">로딩 중...</div></div>
       </div>
 
@@ -394,8 +395,28 @@
 </div>
 
 <script>
-const SUPABASE_URL = 'https://sppvrikqjufrdsrfcokx.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_ymDWJMpm72sXwwcnA3STjQ_mMUCjVjL';
+// ── 환경 분기 ────────────────────────────────────────────────────────────────
+// ★fail-safe 원칙: "확실한 운영 도메인일 때만 운영, 나머지는 전부 스테이징".
+//   file: 로 직접 열기 / hostname 없음 / localhost / 127.0.0.1 / LAN IP(192.168.x.x 등) /
+//   ngrok·미리보기 같은 정체 불명 호스트는 모두 스테이징으로 떨어진다.
+//   → 로컬이나 테스트 환경에서 실수로 열어도 운영 DB에 붙지 않는다.
+//   운영 판정은 simburoom.kr 및 그 하위 도메인(www./admin. 등)으로 한정한다.
+//   쿼리스트링·해시는 판정에서 제외한다(운영 도메인에서 링크 하나로 뒤집히지 않게).
+const PROD_HOST = 'simburoom.kr';
+const IS_STAGING = (function () {
+  if (location.protocol === 'file:') return true;            // 로컬 파일로 직접 열기
+  const h = (location.hostname || '').toLowerCase();
+  if (!h) return true;                                       // hostname 비어 있음
+  if (h.includes('staging') || location.pathname.toLowerCase().includes('staging')) return true;
+  const isProdHost = (h === PROD_HOST || h.endsWith('.' + PROD_HOST));
+  return !isProdHost;                                        // 운영 도메인이 아니면 전부 스테이징
+})();
+const SUPABASE_URL = IS_STAGING
+  ? 'https://asloucseqfoaarnkqoxh.supabase.co'
+  : 'https://sppvrikqjufrdsrfcokx.supabase.co';
+const SUPABASE_ANON_KEY = IS_STAGING
+  ? 'sb_publishable_RNZRzO-_1RleRmjHmFYViQ_uy8CmgT1'
+  : 'sb_publishable_ymDWJMpm72sXwwcnA3STjQ_mMUCjVjL';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
@@ -1226,11 +1247,24 @@ async function rejectInsuranceM(id, name, btn) {
   }
 }
 
+// 목록 상단 건수 표시. 필터가 걸려 있으면 전체 대비 표시 건수를 함께 보여준다.
+function renderListCountM(elId, total, filtered, shown) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (total == null) { el.textContent = ''; return; }
+  let t = (filtered === total) ? `총 ${total}명` : `전체 ${total}명 / 표시 ${filtered}명`;
+  if (shown != null && filtered != null && shown < filtered) t += ` (상위 ${shown}건만 표시)`;
+  el.textContent = t;
+}
+
 async function loadAllDriversM() {
-  let query = db.from('drivers').select('id, name, phone, vehicle_type, vehicle_number, is_approved, is_online, today_earnings, withdrawable_amount, insurance_status, service_area, created_at').not('name', 'is', null).order('created_at', { ascending: false }).limit(100);
+  let query = db.from('drivers').select('id, name, phone, vehicle_type, vehicle_number, is_approved, is_online, today_earnings, withdrawable_amount, insurance_status, service_area, created_at', { count: 'exact' }).not('name', 'is', null).order('created_at', { ascending: false }).limit(100);
   const phoneSearch = document.getElementById('m-driver-phone-search')?.value.trim();
   if (phoneSearch) query = query.ilike('phone', `%${phoneSearch}%`);
-  const { data } = await query;
+  const { data, count: filteredCount } = await query;
+  // 목록의 기준(name 있는 기사)과 동일 조건으로 전체 수를 센다 — 필터만 뺀 값이라야 대비가 맞다.
+  const { count: totalCount } = await db.from('drivers').select('*', { count: 'exact', head: true }).not('name', 'is', null);
+  renderListCountM('m-drivers-count', totalCount, filteredCount ?? (data ? data.length : 0), data ? data.length : 0);
   const c = document.getElementById('driver-list');
   document.getElementById('pending-count').textContent = '';
   if (!data || data.length === 0) { c.innerHTML = '<div class="empty">기사가 없습니다</div>'; return; }
