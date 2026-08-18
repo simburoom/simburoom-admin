@@ -216,6 +216,7 @@
         <div class="section-title">분석·리포트</div>
         <div class="more-menu">
           <div class="more-item" onclick="openSub('ir')"><span class="ic">🚀</span> IR 지표 (투자 트랙션) <span class="arrow">›</span></div>
+          <div class="more-item" onclick="openSub('acq')"><span class="ic">🥕</span> 유입경로 통계 <span class="arrow">›</span></div>
           <div class="more-item" onclick="openSub('etax')"><span class="ic">🧾</span> 세무 신고 (E-TAX) <span class="arrow">›</span></div>
         </div>
 
@@ -327,6 +328,23 @@
         <div class="card"><div class="card-head">⭐ 재구매 유저 용도 (당근→일상)</div><div id="ir-purpose" class="ir-card-body"></div></div>
         <div class="card"><div class="card-head">📞 콜 수락률 (dispatch_events)</div><div id="ir-call" class="ir-card-body"></div></div>
         <div class="card"><div class="card-head">🕐 시간대별 주문 분포</div><div id="ir-hourly" class="ir-card-body"></div></div>
+      </div>
+
+      <!-- SUB: 유입경로 통계 (users.referral_source) — DB 읽기 전용 -->
+      <div id="view-acq" class="view">
+        <div class="subhead"><button class="back-btn" onclick="backToMore()">←</button><h2>유입경로 통계</h2></div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+          <span style="font-size:11px;color:var(--text3);">가입 기간</span>
+          <button class="btn btn-ghost acq-period-btn" data-m="0" onclick="setAcqPeriod(0)">전체</button>
+          <button class="btn btn-ghost acq-period-btn" data-m="1" onclick="setAcqPeriod(1)">1개월</button>
+          <button class="btn btn-ghost acq-period-btn" data-m="3" onclick="setAcqPeriod(3)">3개월</button>
+          <button class="btn btn-ghost acq-period-btn" data-m="6" onclick="setAcqPeriod(6)">6개월</button>
+          <button class="btn btn-ghost acq-period-btn" data-m="12" onclick="setAcqPeriod(12)">12개월</button>
+          <button class="btn btn-ghost" onclick="loadAcq()">🔄</button>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px;">집계 기간: <b id="acq-period-label">전체 기간</b> · users.created_at(가입일) 기준 · 값별 count만 질의</div>
+        <div class="card"><div class="card-head">🥕 유입경로 분포</div><div id="acq-chart"></div></div>
+        <div class="card"><div class="card-head">📋 구간별 인원</div><div id="acq-table"></div></div>
       </div>
 
       <!-- SUB: 세무 신고 (E-TAX) — DB 읽기 전용 -->
@@ -603,7 +621,7 @@ async function logout() {
 
 /* ===== Navigation ===== */
 const TAB_TITLES = { home: '홈', drivers: '기사', orders: '주문', area: '지역', more: '더보기' };
-const SUB_TITLES = { agents: '대리점 관리', master: '마스터', coupons: '쿠폰', push: '푸시 알림', notices: '공지사항', config: '운영 설정', ir: 'IR 지표 (투자 트랙션)', etax: '세무 신고 (E-TAX)' };
+const SUB_TITLES = { acq: '유입경로 통계', agents: '대리점 관리', master: '마스터', coupons: '쿠폰', push: '푸시 알림', notices: '공지사항', config: '운영 설정', ir: 'IR 지표 (투자 트랙션)', etax: '세무 신고 (E-TAX)' };
 function setView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + id).classList.add('active');
@@ -678,12 +696,116 @@ function openSub(id) {
   else if (id === 'notices') loadNotices();
   else if (id === 'config') { loadPeakScheduleM(); loadDispatchRadiiM(); loadWalkMaxDistanceM(); }
   else if (id === 'ir') loadIR();
+  else if (id === 'acq') loadAcq();
   else if (id === 'etax') loadEtax();
 }
 function backToMore() {
   setView('more');
   document.getElementById('topbar-title').textContent = '더보기';
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 유입경로 통계 (users.referral_source) — DB 읽기 전용.
+//   ★행을 한 건도 받지 않는다. 값별로 count:'exact' + head:true 질의만 수행하므로
+//     PostgREST max_rows(1000) 제한과 무관하고, 유저가 늘어도 페이로드가 커지지 않는다.
+//   ★RLS 무변경 — 기존 어드민 세션(anon key + setSession)이 users_admin_all을 통과한다.
+//     로그인하지 않은 anon으로는 users_select_own에 걸려 전부 0으로 보이니 주의.
+//   ★질의 횟수 = 버킷 5회 + 전체 1회. 전체는 4종+null 외의 값이 섞였는지 검증용이다.
+// ═══════════════════════════════════════════════════════════════════════════
+const ACQ_BUCKETS = [
+  { key: 'daangn_ad', label: '🥕 당근 광고' },
+  { key: 'referral',  label: '👥 지인·상대방 추천' },
+  { key: 'search',    label: '🔍 검색 (앱스토어·포털)' },
+  { key: 'etc',       label: '✏️ 기타' },
+  { key: null,        label: '❔ 미응답' },   // referral_source IS NULL
+];
+let acqPeriodMonths = 0;   // 0 = 전체 기간
+
+function acqCutoffISO() {
+  if (!acqPeriodMonths) return null;
+  const d = new Date(); d.setMonth(d.getMonth() - acqPeriodMonths);
+  return d.toISOString();
+}
+function acqPct(n, d) { return d > 0 ? (100 * n / d).toFixed(1) + '%' : '—'; }
+function setAcqPeriod(m) { acqPeriodMonths = m; loadAcq(); }
+
+// 버킷 1개 = count 질의 1회. null 버킷만 .is(...,null), 나머지는 .eq(...).
+// ★.select('*',{count,head})를 먼저 부르고 그 뒤에 필터를 체이닝해야 한다(IR 헬퍼와 동일 규약).
+async function acqCountOne(key, cutoff) {
+  let q = db.from('users').select('*', { count: 'exact', head: true });
+  q = (key === null) ? q.is('referral_source', null) : q.eq('referral_source', key);
+  if (cutoff) q = q.gte('created_at', cutoff);
+  const { count, error } = await q;
+  if (error) throw error;
+  return count || 0;
+}
+async function acqCountTotal(cutoff) {
+  let q = db.from('users').select('*', { count: 'exact', head: true });
+  if (cutoff) q = q.gte('created_at', cutoff);
+  const { count, error } = await q;
+  if (error) throw error;
+  return count || 0;
+}
+
+function acqStyleButtons() {
+  document.querySelectorAll('.acq-period-btn').forEach(b => {
+    const on = Number(b.dataset.m) === acqPeriodMonths;
+    b.style.background = on ? 'var(--brand)' : '';
+    b.style.color = on ? '#fff' : '';
+  });
+  const lbl = document.getElementById('acq-period-label');
+  if (lbl) lbl.textContent = acqPeriodMonths ? `최근 ${acqPeriodMonths}개월` : '전체 기간';
+}
+
+async function loadAcq() {
+  acqStyleButtons();
+  const chart = document.getElementById('acq-chart');
+  const table = document.getElementById('acq-table');
+  if (!chart || !table) return;
+  const loading = '<span style="color:var(--text3);font-size:11px;">집계 중…</span>';
+  chart.innerHTML = loading; table.innerHTML = loading;
+  try {
+    const cutoff = acqCutoffISO();
+    const counts = [];
+    for (const b of ACQ_BUCKETS) counts.push(await acqCountOne(b.key, cutoff));   // 값별 count 5회
+    const total = await acqCountTotal(cutoff);                                    // 검증용 전체 1회
+    const sum = counts.reduce((s, n) => s + n, 0);
+    const unknown = total - sum;
+
+    if (!total) {
+      const empty = '<span style="color:var(--text3);font-size:11px;">해당 기간에 가입한 유저가 없어요.</span>';
+      chart.innerHTML = empty; table.innerHTML = empty;
+      return;
+    }
+
+    chart.innerHTML = ACQ_BUCKETS.map((b, i) => {
+      const pct = 100 * counts[i] / total;
+      const color = b.key === 'daangn_ad' ? 'var(--orange)' : (b.key === null ? 'var(--text3)' : 'var(--brand)');
+      return `<div style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
+          <span style="font-size:12px;color:var(--text);">${b.label}</span>
+          <span style="font-size:12px;font-weight:800;color:${color};">${acqPct(counts[i], total)}</span>
+        </div>
+        <div style="height:7px;background:var(--bg3);border-radius:100px;overflow:hidden;">
+          <div style="width:${pct.toFixed(1)}%;height:100%;background:${color};border-radius:100px;"></div>
+        </div>
+        <div style="font-size:10px;color:var(--text3);margin-top:3px;">${counts[i].toLocaleString()}명</div>
+      </div>`;
+    }).join('');
+
+    table.innerHTML = `<table style="width:100%;font-size:12px;border-collapse:collapse;">
+      <tr style="color:var(--text3);"><th style="text-align:left;padding-bottom:6px;">구간</th><th style="text-align:right;">인원</th><th style="text-align:right;">비율</th></tr>
+      ${ACQ_BUCKETS.map((b, i) => `<tr><td style="padding:3px 0;">${b.label}</td><td style="text-align:right;">${counts[i].toLocaleString()}명</td><td style="text-align:right;font-weight:700;color:var(--brand);">${acqPct(counts[i], total)}</td></tr>`).join('')}
+      <tr style="border-top:1px solid var(--border);"><td style="padding-top:6px;font-weight:700;">합계</td><td style="text-align:right;padding-top:6px;font-weight:700;">${total.toLocaleString()}명</td><td style="text-align:right;padding-top:6px;color:var(--text3);">100%</td></tr>
+    </table>` + (unknown > 0
+      ? `<div style="font-size:10px;color:var(--orange);margin-top:8px;">⚠️ 5구간 어디에도 속하지 않는 값이 ${unknown.toLocaleString()}명 있어요 — referral_source에 예상 밖 값이 들어오고 있습니다.</div>`
+      : '');
+  } catch (e) {
+    const msg = `<span style="color:var(--red);font-size:11px;">집계 실패: ${(e && e.message) ? e.message : e}</span>`;
+    chart.innerHTML = msg; table.innerHTML = msg;
+  }
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // IR 지표 (투자 트랙션) — 전부 DB 읽기 전용. 어드민 기존 db(anon+세션) 그대로 사용.
