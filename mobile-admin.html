@@ -56,6 +56,12 @@
   .btn-block { width: 100%; padding: 14px; font-size: 15px; }
   .btn:disabled { opacity: 0.5; }
 
+  /* 목록 페이지네이션 — 좁은 화면에서 줄바꿈되지 않도록 [‹ 이전][3 / 12][다음 ›] 3칸으로 축약 */
+  .pager { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: nowrap; margin-top: 12px; }
+  .pager button { flex: 0 0 auto; background: var(--bg3); color: var(--text2); border: 1px solid var(--border); border-radius: 8px; font-weight: 700; font-size: 13px; padding: 9px 12px; cursor: pointer; font-family: inherit; white-space: nowrap; }
+  .pager button.pager-cur { flex: 1 1 auto; min-width: 0; background: var(--brand); color: #fff; border-color: var(--brand); text-align: center; }
+  .pager button:disabled { opacity: 0.3; }
+
   input, select, textarea { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 14px; color: var(--text); margin-bottom: 10px; font-family: inherit; }
   textarea { resize: vertical; min-height: 80px; }
   label.fl { display: block; font-size: 12px; color: var(--text3); margin-bottom: 6px; }
@@ -173,10 +179,11 @@
         <div id="m-driver-all-search" style="display:none;margin-bottom:8px;">
           <input id="m-driver-phone-search" placeholder="📞 전화번호 검색 (예: 7985)"
             style="width:100%;padding:8px 12px;background:var(--bg2,#1e1e2e);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;box-sizing:border-box;"
-            onkeyup="if(event.key==='Enter')loadAllDriversM()">
+            onkeyup="if(event.key==='Enter')resetDriversPageM()">
         </div>
         <div id="m-drivers-count" style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px;"></div>
         <div id="driver-list"><div class="empty">로딩 중...</div></div>
+        <div id="m-drivers-pager" class="pager" style="display:none;"></div>
       </div>
 
       <!-- ORDERS (pickup fail) -->
@@ -209,6 +216,7 @@
         <div class="section-title">마케팅·소통</div>
         <div class="more-menu">
           <div class="more-item" onclick="openSub('notices')"><span class="ic">📢</span> 공지사항 <span class="arrow">›</span></div>
+          <div class="more-item" onclick="openSub('popups')"><span class="ic">🖼️</span> 팝업 관리 <span class="arrow">›</span></div>
           <div class="more-item" onclick="openSub('push')"><span class="ic">🔔</span> 푸시 알림 <span class="arrow">›</span></div>
           <div class="more-item" onclick="openSub('coupons')"><span class="ic">🎫</span> 쿠폰 관리 <span class="arrow">›</span></div>
         </div>
@@ -305,6 +313,77 @@
         </div>
         <div class="section-title">공지 목록</div>
         <div id="notice-list"><div class="empty">로딩 중...</div></div>
+      </div>
+
+
+      <!-- SUB: popups -->
+      <div id="view-popups" class="view">
+        <div class="subhead"><button class="back-btn" onclick="backToMore()">←</button><h2>팝업 관리</h2></div>
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div style="font-size:14px;font-weight:700;" id="popup-form-title">팝업 등록</div>
+            <button class="btn btn-ghost" style="width:auto;padding:6px 10px;font-size:11px;" onclick="resetPopupForm()">＋ 새로 작성</button>
+          </div>
+
+          <!-- 이미지 규격 가이드 (상시 표시) -->
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px;">
+            <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:8px;">📐 이미지 규격 가이드</div>
+            <div style="font-size:12px;color:var(--text3);line-height:1.8;">
+              권장 크기 · <b style="color:var(--text);">1080 × 1350 px</b> (가로:세로 4:5)<br>
+              최대 용량 · <b style="color:var(--text);">500 KB</b><br>
+              형식 · <b style="color:var(--text);">JPG 또는 PNG</b>
+            </div>
+            <div style="font-size:11px;color:var(--orange);margin-top:9px;line-height:1.7;">
+              ⚠️ 하단 100px에 중요한 내용을 넣지 마세요<br>&nbsp;&nbsp;&nbsp;(닫기 버튼 영역과 겹칩니다)<br>
+              ⚠️ 4:5보다 세로로 길면 작은 폰에서 잘립니다
+            </div>
+          </div>
+
+          <label class="fl">이미지 *</label>
+          <input type="file" id="popup-file" accept="image/jpeg,image/png" onchange="onPopupFileChange(this)">
+          <div id="popup-upload-status" style="font-size:12px;color:var(--text3);margin:-4px 0 12px;">업로드된 이미지 없음</div>
+
+          <!-- 폰 비율 미리보기 -->
+          <label class="fl">미리보기 (폰 화면 기준 · 팝업 폭 85%)</label>
+          <div style="background:#000;border-radius:14px;padding:18px 0;display:flex;justify-content:center;margin-bottom:8px;">
+            <div style="width:85%;">
+              <div style="position:relative;width:100%;aspect-ratio:4/5;background:var(--bg3);border-radius:10px 10px 0 0;overflow:hidden;">
+                <img id="popup-preview-img" style="width:100%;height:100%;object-fit:cover;display:none;">
+                <div id="popup-preview-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text3);text-align:center;padding:0 12px;">이미지를 업로드하면<br>여기에 표시됩니다</div>
+                <div style="position:absolute;left:0;right:0;bottom:0;height:7.4%;background:repeating-linear-gradient(45deg,rgba(231,76,60,0.28),rgba(231,76,60,0.28) 5px,transparent 5px,transparent 10px);border-top:1px dashed rgba(231,76,60,0.65);"></div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;background:#1c1c1e;border-radius:0 0 10px 10px;padding:11px 13px;">
+                <span style="font-size:12px;color:#8e8e93;">오늘 하루 열지 않기</span>
+                <span style="font-size:12px;color:#fff;font-weight:700;">닫기</span>
+              </div>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:14px;line-height:1.7;">
+            빗금 영역(하단 100px 상당)은 닫기 버튼 바와 겹칩니다.<br>4:5를 벗어난 이미지는 위아래가 잘려 보입니다.
+          </div>
+
+          <label class="fl">링크 URL (선택)</label>
+          <input id="popup-link" placeholder="https://... (비우면 이동 없음)">
+          <label class="fl">대상</label>
+          <select id="popup-target">
+            <option value="all">유저앱 · 기사앱 (둘 다)</option>
+            <option value="user">유저앱</option>
+            <option value="driver">기사앱</option>
+          </select>
+          <label class="fl">노출 시작일시 (비우면 즉시)</label>
+          <input type="datetime-local" id="popup-start">
+          <label class="fl">노출 종료일시 (비우면 무기한)</label>
+          <input type="datetime-local" id="popup-end">
+          <label class="fl">대체문구 (alt_text)</label>
+          <input id="popup-alt" placeholder="이미지를 불러오지 못했을 때 표시할 문구">
+          <label class="fl" style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+            <input type="checkbox" id="popup-active" checked style="width:auto;margin:0;">
+            <span style="font-size:13px;color:var(--text);">활성 (해제 시 노출되지 않음)</span>
+          </label>
+          <button class="btn btn-brand btn-block" onclick="savePopup()">팝업 저장</button>
+        </div>
+        <div class="section-title">팝업 목록</div>
+        <div id="popup-list"><div class="empty">로딩 중...</div></div>
       </div>
 
       <!-- SUB: IR 지표 (투자 트랙션) — DB 읽기 전용 -->
@@ -621,7 +700,7 @@ async function logout() {
 
 /* ===== Navigation ===== */
 const TAB_TITLES = { home: '홈', drivers: '기사', orders: '주문', area: '지역', more: '더보기' };
-const SUB_TITLES = { acq: '유입경로 통계', agents: '대리점 관리', master: '마스터', coupons: '쿠폰', push: '푸시 알림', notices: '공지사항', config: '운영 설정', ir: 'IR 지표 (투자 트랙션)', etax: '세무 신고 (E-TAX)' };
+const SUB_TITLES = { acq: '유입경로 통계', agents: '대리점 관리', master: '마스터', coupons: '쿠폰', push: '푸시 알림', notices: '공지사항', popups: '팝업 관리', config: '운영 설정', ir: 'IR 지표 (투자 트랙션)', etax: '세무 신고 (E-TAX)' };
 function setView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + id).classList.add('active');
@@ -694,6 +773,7 @@ function openSub(id) {
   else if (id === 'master') loadMasterSection();
   else if (id === 'coupons') loadCoupons();
   else if (id === 'notices') loadNotices();
+  else if (id === 'popups') loadPopups();
   else if (id === 'config') { loadPeakScheduleM(); loadDispatchRadiiM(); loadWalkMaxDistanceM(); }
   else if (id === 'ir') loadIR();
   else if (id === 'acq') loadAcq();
@@ -1297,9 +1377,15 @@ function switchDriverTabM(tab) {
   document.getElementById('m-dtab-insurance').classList.toggle('btn-primary', tab === 'insurance');
   document.getElementById('m-dtab-all').classList.toggle('btn-primary', tab === 'all');
   document.getElementById('m-driver-all-search').style.display = tab === 'all' ? 'block' : 'none';
+  // 건수/페이지네이션은 '전체 기사' 탭 전용 — 다른 탭에선 남아 있지 않게 지운다
+  if (tab !== 'all') {
+    document.getElementById('m-drivers-count').textContent = '';
+    const pg = document.getElementById('m-drivers-pager');
+    if (pg) { pg.innerHTML = ''; pg.style.display = 'none'; }
+  }
   if (tab === 'pending') loadPendingDrivers();
   else if (tab === 'insurance') loadInsuranceDriversM();
-  else loadAllDriversM();
+  else resetDriversPageM();
 }
 
 // ===== 보험 재심사 큐 =====
@@ -1369,24 +1455,78 @@ async function rejectInsuranceM(id, name, btn) {
   }
 }
 
-// 목록 상단 건수 표시. 필터가 걸려 있으면 전체 대비 표시 건수를 함께 보여준다.
-function renderListCountM(elId, total, filtered, shown) {
+/* ===== 목록 페이지네이션 (서버측 .range) =====
+   전체를 받아 클라이언트에서 자르지 않는다. 페이지당 LIST_PAGE_SIZE_M건만 서버에서 가져오고,
+   총 건수는 같은 쿼리의 count:'exact'(range와 무관하게 전체 매칭 수를 준다)를 그대로 쓴다. */
+const LIST_PAGE_SIZE_M = 20;
+
+// .range(from, to)에 넣을 구간. page는 1부터.
+function listRangeM(page) {
+  const from = (Math.max(1, page || 1) - 1) * LIST_PAGE_SIZE_M;
+  return { from, to: from + LIST_PAGE_SIZE_M - 1 };
+}
+
+// 총 건수 → 총 페이지 수 (0건이어도 1페이지로 본다)
+function totalPagesOfM(count) {
+  return Math.max(1, Math.ceil((count || 0) / LIST_PAGE_SIZE_M));
+}
+
+// 좁은 화면이라 번호를 나열하면 줄바꿈된다 → [‹ 이전][3 / 12][다음 ›] 3칸 고정.
+// 가운데 버튼을 누르면 페이지 번호를 직접 입력해 건너뛸 수 있다.
+// 페이지가 1개뿐이면 통째로 숨긴다.
+function renderPagerM(elId, page, totalPages, goFn) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!totalPages || totalPages <= 1) { el.innerHTML = ''; el.style.display = 'none'; return; }
+  el.innerHTML =
+    `<button${page <= 1 ? ' disabled' : ` onclick="${goFn}(${page - 1})"`}>‹ 이전</button>` +
+    `<button class="pager-cur" onclick="jumpPageM('${goFn}', ${totalPages})">${page} / ${totalPages}</button>` +
+    `<button${page >= totalPages ? ' disabled' : ` onclick="${goFn}(${page + 1})"`}>다음 ›</button>`;
+  el.style.display = 'flex';
+}
+
+function jumpPageM(goFn, totalPages) {
+  const v = prompt(`이동할 페이지 (1~${totalPages})`);
+  if (v == null) return;
+  const p = parseInt(v, 10);
+  if (isNaN(p) || p < 1 || p > totalPages) { alert('1~' + totalPages + ' 사이의 숫자를 입력해주세요.'); return; }
+  window[goFn](p);
+}
+
+// 목록 상단 건수 표시. 필터가 걸려 있으면 전체 대비 매칭 건수를 함께 보여준다.
+//  page를 넘기면 '3페이지 중 1페이지 (1~50번째)'를 덧붙인다(2페이지 이상일 때만).
+function renderListCountM(elId, total, filtered, unit, page) {
   const el = document.getElementById(elId);
   if (!el) return;
   if (total == null) { el.textContent = ''; return; }
-  let t = (filtered === total) ? `총 ${total}명` : `전체 ${total}명 / 표시 ${filtered}명`;
-  if (shown != null && filtered != null && shown < filtered) t += ` (상위 ${shown}건만 표시)`;
+  const u = unit || '명';
+  let t = (filtered === total) ? `총 ${total}${u}` : `전체 ${total}${u} / 표시 ${filtered}${u}`;
+  if (page && filtered > LIST_PAGE_SIZE_M) {
+    const from = (page - 1) * LIST_PAGE_SIZE_M + 1;
+    const to = Math.min(page * LIST_PAGE_SIZE_M, filtered);
+    t += ` · ${totalPagesOfM(filtered)}페이지 중 ${page}페이지 (${from}~${to}번째)`;
+  }
   el.textContent = t;
 }
 
+// 현재 페이지. 검색어가 바뀌거나 탭을 다시 들어오면 1페이지부터 본다.
+let driversPageM = 1;
+function goDriversPageM(p) { driversPageM = Math.max(1, p); loadAllDriversM(); }
+function resetDriversPageM() { driversPageM = 1; loadAllDriversM(); }
+
 async function loadAllDriversM() {
-  let query = db.from('drivers').select('id, name, phone, vehicle_type, vehicle_number, is_approved, is_online, today_earnings, withdrawable_amount, insurance_status, service_area, created_at', { count: 'exact' }).not('name', 'is', null).order('created_at', { ascending: false }).limit(100);
+  let query = db.from('drivers').select('id, name, phone, vehicle_type, vehicle_number, is_approved, is_online, today_earnings, withdrawable_amount, insurance_status, service_area, created_at', { count: 'exact' }).not('name', 'is', null).order('created_at', { ascending: false });
   const phoneSearch = document.getElementById('m-driver-phone-search')?.value.trim();
   if (phoneSearch) query = query.ilike('phone', `%${phoneSearch}%`);
-  const { data, count: filteredCount } = await query;
+  const pr = listRangeM(driversPageM);
+  const { data, count: filteredCount } = await query.range(pr.from, pr.to);
+  const totalPages = totalPagesOfM(filteredCount);
+  // 검색을 좁혀 페이지 수가 줄어든 상태로 남으면 빈 화면이 되므로 마지막 페이지로 되돌린다
+  if (driversPageM > totalPages) { driversPageM = totalPages; return loadAllDriversM(); }
   // 목록의 기준(name 있는 기사)과 동일 조건으로 전체 수를 센다 — 필터만 뺀 값이라야 대비가 맞다.
   const { count: totalCount } = await db.from('drivers').select('*', { count: 'exact', head: true }).not('name', 'is', null);
-  renderListCountM('m-drivers-count', totalCount, filteredCount ?? (data ? data.length : 0), data ? data.length : 0);
+  renderListCountM('m-drivers-count', totalCount, filteredCount ?? (data ? data.length : 0), '명', driversPageM);
+  renderPagerM('m-drivers-pager', driversPageM, totalPages, 'goDriversPageM');
   const c = document.getElementById('driver-list');
   document.getElementById('pending-count').textContent = '';
   if (!data || data.length === 0) { c.innerHTML = '<div class="empty">기사가 없습니다</div>'; return; }
@@ -1976,6 +2116,230 @@ async function deleteNotice(id) {
   const { error: noticeErr } = await db.from('notices').delete().eq('id', id);
   if (noticeErr) { alert('공지 삭제 실패: ' + noticeErr.message); return; }
   loadNotices();
+}
+
+
+// ===== 팝업 관리 =====
+// 앱 실행 시 뜨는 이미지 팝업. 내용은 전부 DB(app_popups) + Storage(app-popups)에 있으므로
+// 앱 재빌드 없이 어드민에서만 바꾼다.
+// 동시 노출은 앱당 1개 — 앱은 조건에 맞는 것 중 created_at 최신 1건만 가져간다.
+const POPUP_BUCKET = 'app-popups';
+const POPUP_MAX_BYTES = 1024 * 1024;   // 버킷 하드 제한(1MB). 초과하면 업로드 자체가 실패하므로 차단한다.
+const POPUP_WARN_BYTES = 500 * 1024;   // 권장 용량(500KB). 초과해도 확인만 받고 진행한다.
+const POPUP_RATIO = 4 / 5;             // 권장 가로:세로
+const POPUP_RATIO_TOL = 0.10;          // ±10%
+const POPUP_Q = String.fromCharCode(39);   // ' — onclick 속성 조립용
+
+let popupImageUrl = null;   // 업로드 완료된 public URL (저장 시 image_url로 들어감)
+let popupEditId = null;     // 수정 중인 팝업 id. null이면 신규 등록.
+
+function popupTargetLabel(t) { return t === 'all' ? '유저·기사' : t === 'user' ? '유저앱' : '기사앱'; }
+function popupTargetBadge(t) { return t === 'all' ? 'blue' : t === 'user' ? 'green' : 'orange'; }
+
+// ISO → datetime-local 입력값(로컬 시각). 수정 폼에 값을 채울 때 쓴다.
+function popupToLocalInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function popupPeriodText(p) {
+  const f = (v) => new Date(v).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  if (!p.start_at && !p.end_at) return '무기한';
+  if (!p.start_at) return '~ ' + f(p.end_at);
+  if (!p.end_at) return f(p.start_at) + ' ~';
+  return f(p.start_at) + ' ~ ' + f(p.end_at);
+}
+
+// 지금 이 순간 노출 조건을 만족하는가 (활성 + 기간 내)
+function isPopupLive(p, now) {
+  if (!p.is_active) return false;
+  if (p.start_at && new Date(p.start_at).getTime() > now) return false;
+  if (p.end_at && new Date(p.end_at).getTime() < now) return false;
+  return true;
+}
+
+// ★"현재 노출 중" 판정.
+//   유저앱과 기사앱은 각각 독립적으로 1건을 가져가므로 앱별로 따로 계산한다.
+//   target='all'은 양쪽 후보에 모두 들어간다. list는 created_at 내림차순이라 find가 곧 최신 1건.
+function computeLivePopupIds(list) {
+  const now = Date.now();
+  const pick = (targets) => {
+    const hit = list.find((p) => isPopupLive(p, now) && targets.indexOf(p.target) >= 0);
+    return hit ? hit.id : null;
+  };
+  return { user: pick(['user', 'all']), driver: pick(['driver', 'all']) };
+}
+
+// 파일의 실제 픽셀 크기를 읽는다. 실패하면 null(비율 검사를 건너뛴다).
+function readPopupImageSize(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = function () { URL.revokeObjectURL(url); resolve({ w: img.naturalWidth, h: img.naturalHeight }); };
+    img.onerror = function () { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
+}
+
+function setPopupPreview(url) {
+  const img = document.getElementById('popup-preview-img');
+  const empty = document.getElementById('popup-preview-empty');
+  if (!img || !empty) return;
+  if (url) { img.src = url; img.style.display = 'block'; empty.style.display = 'none'; }
+  else { img.removeAttribute('src'); img.style.display = 'none'; empty.style.display = 'flex'; }
+}
+
+// 업로드: 검사(1MB 차단 + 500KB·비율 경고) → Storage 업로드 → public URL 확보 → 미리보기
+async function onPopupFileChange(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const status = document.getElementById('popup-upload-status');
+
+  if (file.type !== 'image/jpeg' && file.type !== 'image/png') {
+    alert('JPG 또는 PNG만 업로드할 수 있습니다.');
+    input.value = ''; return;
+  }
+  // 1MB 초과는 버킷 제한이라 업로드해도 실패한다 → 차단
+  if (file.size > POPUP_MAX_BYTES) {
+    alert('1MB를 초과했습니다 (' + Math.round(file.size / 1024) + 'KB).\n\n버킷 제한이라 업로드할 수 없습니다. 이미지를 압축해주세요.');
+    input.value = ''; return;
+  }
+  // 500KB 초과는 경고 후 진행(차단 아님)
+  if (file.size > POPUP_WARN_BYTES) {
+    if (!confirm('권장 용량(500KB)을 초과했습니다. 로딩이 느려질 수 있습니다.\n\n현재 ' + Math.round(file.size / 1024) + 'KB\n\n계속 진행할까요?')) { input.value = ''; return; }
+  }
+  // 비율 4:5 ±10% 밖이면 경고 후 진행(차단 아님)
+  const dim = await readPopupImageSize(file);
+  if (dim && dim.h > 0) {
+    const ratio = dim.w / dim.h;
+    if (Math.abs(ratio - POPUP_RATIO) > POPUP_RATIO * POPUP_RATIO_TOL) {
+      if (!confirm('권장 비율(4:5)과 다릅니다. 일부 기기에서 잘릴 수 있습니다.\n\n현재 ' + dim.w + ' × ' + dim.h + ' (' + ratio.toFixed(2) + ':1)\n권장 1080 × 1350 (0.80:1)\n\n계속 진행할까요?')) { input.value = ''; return; }
+    }
+  }
+
+  if (status) status.textContent = '업로드 중...';
+  const ext = file.type === 'image/png' ? 'png' : 'jpg';
+  const fileName = 'popup_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.' + ext;
+  const { error } = await db.storage.from(POPUP_BUCKET).upload(fileName, file, { contentType: file.type, upsert: true });
+  if (error) {
+    if (status) status.textContent = '업로드 실패';
+    alert('업로드 실패: ' + (error.message || JSON.stringify(error)));
+    return;
+  }
+  const { data: urlData } = db.storage.from(POPUP_BUCKET).getPublicUrl(fileName);
+  popupImageUrl = urlData.publicUrl;
+  if (status) status.innerHTML = '<span style="color:var(--green);">업로드 완료</span> · ' + Math.round(file.size / 1024) + 'KB' + (dim ? ' · ' + dim.w + '×' + dim.h : '');
+  setPopupPreview(popupImageUrl);
+}
+
+function resetPopupForm() {
+  popupEditId = null;
+  popupImageUrl = null;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  set('popup-file', ''); set('popup-link', ''); set('popup-target', 'all');
+  set('popup-start', ''); set('popup-end', ''); set('popup-alt', '');
+  const act = document.getElementById('popup-active'); if (act) act.checked = true;
+  const st = document.getElementById('popup-upload-status'); if (st) st.textContent = '업로드된 이미지 없음';
+  const ft = document.getElementById('popup-form-title'); if (ft) ft.textContent = '팝업 등록';
+  setPopupPreview(null);
+}
+
+async function editPopup(id) {
+  const { data, error } = await db.from('app_popups').select('*').eq('id', id).maybeSingle();
+  if (error || !data) { alert('불러오기 실패: ' + (error ? error.message : '행 없음')); return; }
+  popupEditId = data.id;
+  popupImageUrl = data.image_url;
+  const set = (k, v) => { const el = document.getElementById(k); if (el) el.value = v || ''; };
+  set('popup-link', data.link_url); set('popup-target', data.target || 'all');
+  set('popup-start', popupToLocalInput(data.start_at)); set('popup-end', popupToLocalInput(data.end_at));
+  set('popup-alt', data.alt_text);
+  const act = document.getElementById('popup-active'); if (act) act.checked = !!data.is_active;
+  const st = document.getElementById('popup-upload-status'); if (st) st.innerHTML = '<span style="color:var(--green);">기존 이미지 유지</span> · 새 파일을 고르면 교체됩니다';
+  const ft = document.getElementById('popup-form-title'); if (ft) ft.textContent = '팝업 수정';
+  setPopupPreview(popupImageUrl);
+  const f = document.getElementById('popup-file'); if (f) f.value = '';
+}
+
+async function savePopup() {
+  if (!popupImageUrl) { alert('이미지를 업로드해주세요.'); return; }
+  const link = (document.getElementById('popup-link').value || '').trim();
+  if (link && !/^https?:\/\//i.test(link)) { alert('링크는 http:// 또는 https:// 로 시작하는 외부 URL만 입력할 수 있습니다.'); return; }
+  const startVal = document.getElementById('popup-start').value;
+  const endVal = document.getElementById('popup-end').value;
+  if (startVal && endVal && new Date(startVal).getTime() > new Date(endVal).getTime()) {
+    alert('종료일시가 시작일시보다 빠릅니다.'); return;
+  }
+  const row = {
+    image_url: popupImageUrl,
+    link_url: link || null,
+    target: document.getElementById('popup-target').value,
+    is_active: document.getElementById('popup-active').checked,
+    start_at: startVal ? new Date(startVal).toISOString() : null,
+    end_at: endVal ? new Date(endVal).toISOString() : null,
+    alt_text: (document.getElementById('popup-alt').value || '').trim() || null,
+  };
+  const q = popupEditId
+    ? await db.from('app_popups').update(row).eq('id', popupEditId)
+    : await db.from('app_popups').insert(row);
+  if (q.error) { alert('저장 실패: ' + q.error.message); return; }
+  alert(popupEditId ? '팝업 수정 완료!' : '팝업 등록 완료!');
+  resetPopupForm();
+  loadPopups();
+}
+
+async function togglePopupActive(id, next) {
+  const { error } = await db.from('app_popups').update({ is_active: next }).eq('id', id);
+  if (error) { alert('변경 실패: ' + error.message); return; }
+  loadPopups();
+}
+
+async function deletePopup(id) {
+  if (!confirm('이 팝업을 삭제할까요?\n\n삭제하면 앱에서 즉시 사라집니다.')) return;
+  const { error } = await db.from('app_popups').delete().eq('id', id);
+  if (error) { alert('삭제 실패: ' + error.message); return; }
+  if (popupEditId === id) resetPopupForm();
+  loadPopups();
+}
+
+async function loadPopups() {
+  const container = document.getElementById('popup-list');
+  if (!container) return;
+  const { data, error } = await db.from('app_popups')
+    .select('id, image_url, link_url, target, is_active, start_at, end_at, alt_text, created_at')
+    .order('created_at', { ascending: false });
+  if (error) { container.innerHTML = '<div class="empty">조회 실패: ' + error.message + '</div>'; return; }
+  if (!data || data.length === 0) { container.innerHTML = '<div class="empty">등록된 팝업 없음</div>'; return; }
+
+  const live = computeLivePopupIds(data);
+  container.innerHTML = data.map((p) => {
+    const liveFor = [];
+    if (live.user === p.id) liveFor.push('유저앱');
+    if (live.driver === p.id) liveFor.push('기사앱');
+    const liveBadge = liveFor.length ? '<span class="badge purple">🟢 노출 중 · ' + liveFor.join('·') + '</span>' : '';
+    const oc = (fn, extra) => 'onclick="' + fn + '(' + POPUP_Q + p.id + POPUP_Q + (extra === undefined ? '' : ',' + extra) + ')"';
+    return '<div class="list-item"' + (liveFor.length ? ' style="border-color:var(--brand);"' : '') + '>'
+      + '<div style="display:flex;gap:12px;">'
+      +   '<img src="' + p.image_url + '" style="width:64px;height:80px;object-fit:cover;border-radius:8px;flex-shrink:0;background:var(--bg3);">'
+      +   '<div style="flex:1;min-width:0;">'
+      +     '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:5px;">'
+      +       '<span class="badge ' + popupTargetBadge(p.target) + '">' + popupTargetLabel(p.target) + '</span>'
+      +       '<span class="badge ' + (p.is_active ? 'green' : 'gray') + '">' + (p.is_active ? '활성' : '비활성') + '</span>'
+      +       liveBadge
+      +     '</div>'
+      +     '<div class="li-sub">노출기간 · ' + popupPeriodText(p) + '</div>'
+      +     (p.link_url ? '<div class="li-sub" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">🔗 ' + p.link_url + '</div>' : '')
+      +     (p.alt_text ? '<div class="li-sub">💬 ' + p.alt_text + '</div>' : '')
+      +     '<div class="li-sub">등록 ' + new Date(p.created_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + '</div>'
+      +   '</div>'
+      + '</div>'
+      + '<div class="li-actions">'
+      +   '<button class="btn btn-ghost" ' + oc('editPopup') + '>수정</button>'
+      +   '<button class="btn btn-ghost" ' + oc('togglePopupActive', !p.is_active) + '>' + (p.is_active ? '비활성화' : '활성화') + '</button>'
+      +   '<button class="btn btn-red" ' + oc('deletePopup') + '>삭제</button>'
+      + '</div></div>';
+  }).join('');
 }
 
 /* ===== Init ===== */
